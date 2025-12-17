@@ -1,0 +1,40 @@
+Preparing H4 indicators...
+Starting Optimization...
+Start                     2025-09-11 00:00...
+End                       2025-09-15 07:50...
+Duration                      4 days 07:50:00
+Exposure Time [%]                    34.31221
+Equity Final [$]                 100650.92257
+Equity Peak [$]                  100945.22178
+Commissions [$]                      52.30143
+Return [%]                            0.65092
+Buy & Hold Return [%]                -0.07131
+Return (Ann.) [%]                    21.10881
+Volatility (Ann.) [%]                 1.75809
+CAGR [%]                             45.92396
+Sharpe Ratio                         12.00666
+Sortino Ratio                             inf
+Calmar Ratio                         49.64477
+Alpha [%]                             0.68434
+Beta                                  0.46861
+Max. Drawdown [%]                     -0.4252
+Avg. Drawdown [%]                    -0.11136
+Max. Drawdown Duration        3 days 00:35:00
+Avg. Drawdown Duration        0 days 08:15:00
+# Trades                                    3
+Win Rate [%]                            100.0
+Best Trade [%]                        0.47684
+Worst Trade [%]                       0.12582
+Avg. Trade [%]                        0.24939
+Max. Trade Duration           0 days 07:05:00
+Avg. Trade Duration           0 days 06:25:00
+Profit Factor                             NaN
+Expectancy [%]                        0.24952
+SQN                                   2.19846
+Kelly Criterion                           NaN
+_strategy                 H4TrendHedgeStra...
+_equity_curve                             ...
+_trades                      Size  EntryBa...
+dtype: object
+  pt_mult: 0.0001
+  slope_thresh: 0.1

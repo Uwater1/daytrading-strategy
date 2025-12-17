@@ -168,26 +168,41 @@ class H4TrendHedgeStrategy(Strategy):
 # Optimization & Run
 # ========================================
 
-def run_backtest(filepath, optimize=False):
+def run_backtest(filepath):
     raw_data = load_data(filepath)
     data = prepare_strategy_data(raw_data)
     
-    bt = Backtest(data, H4TrendHedgeStrategy, cash=100000, commission=.0002, exclusive_orders=True)
+    bt = Backtest(data, H4TrendHedgeStrategy, cash=100000, commission=.0001, exclusive_orders=True)
     
-    if optimize:
-        print("Starting Optimization...")
-        stats = bt.optimize(
-            pt_mult=[0.0001, 0.0002, 0.0003],
-            slope_thresh=[0.1, 0.2, 0.3],
-            maximize='Sharpe Ratio'
-        )
-    else:
-        stats = bt.run()
+    print("Starting Optimization...")
+    
+def run_backtest(filepath):
+    raw_data = load_data(filepath)
+    data = prepare_strategy_data(raw_data)
+    
+    bt = Backtest(data, H4TrendHedgeStrategy, cash=100000, commission=.0001, exclusive_orders=True)
+    
+    print("Starting Optimization...")
+    stats = bt.optimize(
+        pt_mult=[0.0001, 0.0002, 0.0003],
+        slope_thresh=[0.1, 0.2, 0.3],
+        maximize='Sharpe Ratio'
+    )
     
     print(stats)
+    
+    # Access optimized parameters from the strategy
+    optimized_strategy = stats._strategy
+    print(f"  pt_mult: {optimized_strategy.pt_mult}")
+    print(f"  slope_thresh: {optimized_strategy.slope_thresh}")
+    
     bt.plot()
+    
     return stats
 
 if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: python plan.py {data}.csv")
+        sys.exit(1)
     if len(sys.argv) > 1:
-        run_backtest(sys.argv[1], optimize=False)
+        run_backtest(sys.argv[1])
