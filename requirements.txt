@@ -1,0 +1,7 @@
+numpy
+pandas
+pandas-ta
+psutil
+numba
+backtesting
+sambo >= 1.25.2
