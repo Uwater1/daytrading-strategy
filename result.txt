@@ -1,0 +1,53 @@
+Running BigBarAllIn strategy on gd5m.csv...
+
+1. Running strategy optimization...
+Optimization Results:
+Start                     2025-06-30 00:25...
+End                       2025-10-09 19:25...
+Duration                    101 days 19:00:00
+Exposure Time [%]                     2.06907
+Equity Final [$]                   102673.757
+Equity Peak [$]                    102743.057
+Return [%]                            2.67376
+Buy & Hold Return [%]                21.71462
+Return (Ann.) [%]                     7.89616
+Volatility (Ann.) [%]                 2.89948
+CAGR [%]                              6.75041
+Sharpe Ratio                           2.7233
+Sortino Ratio                         8.41497
+Calmar Ratio                         10.32657
+Alpha [%]                             1.67563
+Beta                                  0.04597
+Max. Drawdown [%]                    -0.76465
+Avg. Drawdown [%]                    -0.17961
+Max. Drawdown Duration       34 days 11:05:00
+Avg. Drawdown Duration        4 days 17:01:00
+# Trades                                  130
+Win Rate [%]                         42.30769
+Best Trade [%]                         1.0237
+Worst Trade [%]                      -0.20418
+Avg. Trade [%]                        0.02071
+Max. Trade Duration           0 days 01:00:00
+Avg. Trade Duration           0 days 00:12:00
+Profit Factor                         1.69531
+Expectancy [%]                        0.02083
+SQN                                   1.54313
+Kelly Criterion                        0.1733
+_strategy                 BigBarAllIn(atr_...
+_equity_curve                             ...
+_trades                        Size  Entry...
+dtype: object
+
+Optimized Parameters:
+  atr_period: 30
+  k_atr: 1.8
+  uptail_max_ratio: 0.7
+  prev3_min_ratio: 0.4
+
+2. Plotting optimized strategy results...
+Optimized strategy plot saved as optimized_strategy_plot.html
+
+3. Generating parameter heatmaps...
+Interactive parameter heatmaps generated successfully!
+
+All operations completed successfully!

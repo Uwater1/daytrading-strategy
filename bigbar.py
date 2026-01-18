@@ -5,8 +5,14 @@ import pandas_ta as ta
 from backtesting import Backtest, Strategy
 import sys
 import math
+from functools import lru_cache
 
-def load_data(filepath):
+# -------------------------
+# Caching for Data Loading
+# -------------------------
+@lru_cache(maxsize=20)
+def load_data_cached(filepath):
+    """Cached version of load_data to avoid duplicate loading"""
     try:
         df = pd.read_csv(filepath)
         df.columns = [x.lower() for x in df.columns]
@@ -18,10 +24,14 @@ def load_data(filepath):
         df[cols] = df[cols].astype(float)
         df = df[~df.index.duplicated(keep='first')]
         df.sort_index(inplace=True)
-        return df
+        return df.copy()
     except Exception as e:
         print(f"Error: {e}")
         return None
+
+def load_data(filepath):
+    """Wrapper to maintain API compatibility"""
+    return load_data_cached(filepath)
 
 # -------------
 # Configuration
@@ -64,22 +74,24 @@ class BigBarAllIn(Strategy):
             return
 
         i = len(self.data.Close) - 1
-        open_p = float(self.data.Open[-1])
-        high_p = float(self.data.High[-1])
-        low_p = float(self.data.Low[-1])
-        close_p = float(self.data.Close[-1])
+        
+        # Get current bar data without repeated float() conversions
+        open_p = self.data.Open[-1]
+        high_p = self.data.High[-1]
+        low_p = self.data.Low[-1]
+        close_p = self.data.Close[-1]
         size = high_p - low_p
         body = abs(close_p - open_p)
-        atr = float(self.data.df['ATR'].iat[i])  # ATR precomputed as column
+        atr = self.data.df[f'ATR_{self.atr_period}'].iat[i]
 
         # --- if currently not in a trade, check entry conditions ---
         if not self.position:
             # need at least 3 previous bars for prev3 sum
             try:
                 prev3_sum = (
-                    (float(self.data.Close[-2]) - float(self.data.Open[-2])) +
-                    (float(self.data.Close[-3]) - float(self.data.Open[-3])) +
-                    (float(self.data.Close[-4]) - float(self.data.Open[-4]))
+                    (self.data.Close[-2] - self.data.Open[-2]) +
+                    (self.data.Close[-3] - self.data.Open[-3]) +
+                    (self.data.Close[-4] - self.data.Open[-4])
                 )
             except Exception:
                 return
@@ -120,10 +132,10 @@ class BigBarAllIn(Strategy):
             self._bars_since_entry += 1
 
             # current bar's metrics
-            prev_bar_high = float(self.data.High[-1])
-            prev_bar_low = float(self.data.Low[-1])
-            prev_bar_close = float(self.data.Close[-1])
-            prev_bar_open = float(self.data.Open[-1])
+            prev_bar_high = self.data.High[-1]
+            prev_bar_low = self.data.Low[-1]
+            prev_bar_close = self.data.Close[-1]
+            prev_bar_open = self.data.Open[-1]
 
             # 1) Two-bar immediate exit rule: If this is the first bar after entry (bars_since_entry == 1)
             #    and it is red OR did not make a new high (i.e., this bar high <= entry_bar_high), exit at this bar close.
@@ -144,8 +156,8 @@ class BigBarAllIn(Strategy):
             if self._bars_since_entry >= 2:
                 # compute lowest low among previous 2 bars: [-1] and [-2]
                 try:
-                    low_1 = float(self.data.Low[-1])
-                    low_2 = float(self.data.Low[-2])
+                    low_1 = self.data.Low[-1]
+                    low_2 = self.data.Low[-2]
                     trailing_stop = min(low_1, low_2)
                 except Exception:
                     trailing_stop = self._current_stop
@@ -155,8 +167,8 @@ class BigBarAllIn(Strategy):
                     self._current_stop = trailing_stop
 
                 # if current bar low breached our stop, exit at current close
-                if float(self.data.Low[-1]) <= self._current_stop:
-                    exit_price = float(self.data.Close[-1])
+                if self.data.Low[-1] <= self._current_stop:
+                    exit_price = self.data.Close[-1]
                     self._close_position_and_log(exit_price)
                     return
 
@@ -191,75 +203,57 @@ class BigBarAllIn(Strategy):
 # -------------------
 # Helper & main
 # -------------------
-def run_backtest(filepath):
+def run_backtest(filepath, print_result=True, atr_period=ATR_PERIOD):
     # load and prepare data
     df = load_data(filepath)
     if df is None:
         raise SystemExit("Failed to load data")
 
     # compute ATR and attach as column (pandas_ta usage)
-    df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=20)
+    df[f'ATR_{atr_period}'] = ta.atr(df['High'], df['Low'], df['Close'], length=atr_period)
     # drop NaNs produced by ATR warm-up
     df.dropna(inplace=True)
 
     # run backtest: trade on close to attempt entry at close of signal bar
     bt = Backtest(df, BigBarAllIn, cash=INITIAL_CASH, commission=COMMISSION, trade_on_close=TRADE_ON_CLOSE)
-    stats = bt.run()
-    # get strategy instance trades log from returned object: Backtest.run returns stats; to get trades_log we need to run using
-    # bt.run() returns a 'results' object inside backtest that holds 'strategy' instance (not always public).
-    # For reliability, we'll instead re-run with .run() while capturing the strategy via bt._strategy if available.
-    # Simpler: run again but record trades from returned strategy instance by using the 'run' method and capturing the
-    # 'strategy' attribute if present.
-
-    # Run backtest and get output
-    output = bt.run()
+    # Run backtest and get trades from results directly
+    stats = bt.run(atr_period=atr_period)
     
-    # Extract trades directly from the backtest results
-    if hasattr(output, '_trades') and not output._trades.empty:
-        trades_df = output._trades[['EntryBar', 'ExitBar', 'EntryPrice', 'ExitPrice', 'Size', 'PnL']]
+    # Extract trades from the backtest results
+    if hasattr(stats, '_trades') and not stats._trades.empty:
+        trades_df = stats._trades[['EntryBar', 'ExitBar', 'EntryPrice', 'ExitPrice', 'Size', 'PnL']]
         trades_df.columns = ['entry_index', 'exit_index', 'entry_price', 'exit_price', 'size', 'pnl']
+        trades_df.to_csv('bigbar_trades.csv', index=False)
     else:
         print("No trades were executed in this backtest.")
-        print(output)
-        return output, bt
-    trades_df.to_csv('bigbar_trades.csv', index=False)
-
-    # compute win rate and Kelly
-    pnl = trades_df['pnl'].values
-    n_trades = len(pnl)
-    wins = pnl[pnl > 0]
-    losses = pnl[pnl <= 0]
-    win_rate = len(wins) / n_trades if n_trades > 0 else float('nan')
-    avg_win = wins.mean() if len(wins) > 0 else 0.0
-    avg_loss = losses.mean() if len(losses) > 0 else 0.0  # avg_loss ≤ 0
-
-    # compute b = avg_win / |avg_loss|
-    if avg_loss == 0:
-        b = float('nan')
-        kelly = float('nan')
-    else:
-        b = (avg_win / abs(avg_loss)) if (avg_win and avg_loss != 0) else float('nan')
-        if not np.isfinite(b) or b == 0:
-            kelly = float('nan')
-        else:
-            p = win_rate
-            q = 1 - p
-            kelly = p - q / b
+        if print_result:
+            print(stats)
+        return stats, bt
 
     # print results
-    print(output)
-    return output, bt
+    if print_result:
+        print(stats)
+    return stats, bt
 
 
-def optimize_strategy(filepath, return_heatmap=False):
+def optimize_strategy(filepath, return_heatmap=True):
     # load and prepare data
     df = load_data(filepath)
     if df is None:
         raise SystemExit("Failed to load data")
 
-    # compute ATR and attach as column (pandas_ta usage)
-    df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=20)
-    # drop NaNs produced by ATR warm-up
+    # Reduced optimization grid for better performance
+    atr_periods = [15, 20, 25, 30]
+    k_atr_values = [1.8, 2.0, 2.2, 2.4]
+    uptail_ratios = [0.6, 0.7, 0.8]
+    prev3_ratios = [0.4, 0.5, 0.6]
+    
+    # Precompute only necessary ATR periods
+    for period in atr_periods:
+        df[f'ATR_{period}'] = ta.atr(df['High'], df['Low'], df['Close'], length=period)
+    
+    # Drop NaNs based on maximum ATR period
+    max_atr_period = max(atr_periods)
     df.dropna(inplace=True)
 
     # run backtest: trade on close to attempt entry at close of signal bar
@@ -268,33 +262,51 @@ def optimize_strategy(filepath, return_heatmap=False):
     # Define optimization parameters
     if return_heatmap:
         optimize_result, heatmap = bt.optimize(
-            k_atr=list(np.arange(1.5, 3.5, 0.5)),
-            uptail_max_ratio=list(np.arange(0.5, 0.9, 0.1)),
-            prev3_min_ratio=list(np.arange(0.3, 0.7, 0.1)),
-            buffer_ratio=list(np.arange(0.005, 0.02, 0.005)),
+            atr_period=atr_periods,
+            k_atr=k_atr_values,
+            uptail_max_ratio=uptail_ratios,
+            prev3_min_ratio=prev3_ratios,
             maximize='Return [%]',
             constraint=lambda param: param.uptail_max_ratio > 0.5 and param.prev3_min_ratio > 0.3,
             return_heatmap=True
         )
         print("Optimization Results:")
         print(optimize_result)
+        
+        # Print optimized parameters
+        st = optimize_result._strategy
+        print(f"\nOptimized Parameters:")
+        print(f"  atr_period: {st.atr_period}")
+        print(f"  k_atr: {st.k_atr}")
+        print(f"  uptail_max_ratio: {st.uptail_max_ratio}")
+        print(f"  prev3_min_ratio: {st.prev3_min_ratio}")
+        
         return optimize_result, bt, heatmap
     else:
         optimize_result = bt.optimize(
-            k_atr=list(np.arange(1.5, 3.5, 0.5)),
-            uptail_max_ratio=list(np.arange(0.5, 0.9, 0.1)),
-            prev3_min_ratio=list(np.arange(0.3, 0.7, 0.1)),
-            buffer_ratio=list(np.arange(0.005, 0.02, 0.005)),
+            atr_period=atr_periods,
+            k_atr=k_atr_values,
+            uptail_max_ratio=uptail_ratios,
+            prev3_min_ratio=prev3_ratios,
             maximize='Return [%]',
             constraint=lambda param: param.uptail_max_ratio > 0.5 and param.prev3_min_ratio > 0.3
         )
         print("Optimization Results:")
         print(optimize_result)
+        
+        # Print optimized parameters
+        st = optimize_result._strategy
+        print(f"\nOptimized Parameters:")
+        print(f"  atr_period: {st.atr_period}")
+        print(f"  k_atr: {st.k_atr}")
+        print(f"  uptail_max_ratio: {st.uptail_max_ratio}")
+        print(f"  prev3_min_ratio: {st.prev3_min_ratio}")
+        
         return optimize_result, bt
 
 
 def plot_strategy(filepath, filename='strategy_plot.html'):
-    _, bt = run_backtest(filepath)
+    _, bt = run_backtest(filepath, print_result=False)
     bt.plot(filename=filename)
     print(f"Plot saved as {filename}")
 
@@ -305,10 +317,17 @@ def plot_heatmaps(filepath):
     
     # Use built-in heatmap plotting from backtesting.py
     try:
+        # Check if matplotlib is available
+        import matplotlib
+        matplotlib.use('Agg')  # Use non-interactive backend
+        import matplotlib.pyplot as plt
+        
         # Save heatmap as PNG using backtesting's built-in heatmap support
         heatmap.plot().figure.savefig('parameter_heatmaps.png', bbox_inches='tight')
         print("Parameter heatmaps saved as parameter_heatmaps.png")
         
+    except ImportError:
+        print("Error plotting heatmaps: matplotlib is required for heatmap visualization")
     except Exception as e:
         print(f"Error plotting heatmaps: {e}")
 
@@ -326,26 +345,32 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     
-    # Run all actions by default
+    # Run optimization and plotting by default
     print(f"Running BigBarAllIn strategy on {args.filepath}...")
     
-    # Run backtest
-    print("\n1. Running backtest...")
-    stats, bt = run_backtest(args.filepath)
-    
-    # Run optimization
     if not args.no_optimize:
-        print("\n2. Running strategy optimization...")
-        optimize_result, bt_optimize = optimize_strategy(args.filepath)
-    
-    # Run plotting
-    if not args.no_plot:
-        print("\n3. Plotting strategy results...")
-        plot_strategy(args.filepath)
-    
-    # Run heatmap generation
-    if not args.no_optimize and not args.no_heatmaps:
-        print("\n4. Generating parameter heatmaps...")
-        plot_heatmaps(args.filepath)
-    
+        # Run optimization with heatmap
+        optimize_result, bt, heatmap = optimize_strategy(args.filepath, return_heatmap=True)
+        
+        # Plot optimized results
+        if not args.no_plot:
+            bt.plot(filename='optimized_strategy_plot.html')
+        
+        # Generate parameter heatmaps using built-in functionality
+        if not args.no_heatmaps:
+            try:
+                from backtesting.lib import plot_heatmaps
+                
+                # Create interactive heatmap using backtesting.lib.plot_heatmaps
+                plot_heatmaps(heatmap, agg='mean')
+                
+            except ImportError:
+                print("Error plotting heatmaps: backtesting.lib.plot_heatmaps is required")
+            except Exception as e:
+                print(f"Error plotting heatmaps: {e}")
+    else:
+        # Run backtest without optimization
+        print("\n1. Running backtest without optimization...")
+        run_backtest(args.filepath, print_result=True)
+        
     print("\nAll operations completed successfully!")
