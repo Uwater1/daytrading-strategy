@@ -16,8 +16,7 @@ The strategy is a **semi-automated, H4 trend-following pullback system with a co
 
 ### II. Definitions & Core Setup Parameters
 
-* **"Point" Definition:** For standardisation, 1 Point refers to a standard pip/tick for the instrument (e.g., $0.01 in US Oil, $0.10 in Gold). The source text approximates 30 points as 0.02% of price.
-
+* **"Point" Definition:** For standardisation, 1 Point refers to a standard pip/tick for the instrument (e.g., $0.01 in US Oil, $0.10 in Gold). 
 
 * **Indicators:**
 * H4 EMA 60 (Exponential Moving Average)
