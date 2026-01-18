@@ -1,0 +1,375 @@
+# test_bigbar_allin.py
+import numpy as np
+import pandas as pd
+import pandas_ta as ta
+from backtesting import Backtest, Strategy
+import sys
+import math
+
+def load_data(filepath):
+    try:
+        df = pd.read_csv(filepath)
+        df.columns = [x.lower() for x in df.columns]
+        if 'time' in df.columns:
+            df['time'] = pd.to_datetime(df['time'], utc=True)
+            df.set_index('time', inplace=True)
+        df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}, inplace=True)
+        cols = ['Open', 'High', 'Low', 'Close']
+        df[cols] = df[cols].astype(float)
+        df = df[~df.index.duplicated(keep='first')]
+        df.sort_index(inplace=True)
+        return df
+    except Exception as e:
+        print(f"Error: {e}")
+        return None
+
+# -------------
+# Configuration
+# -------------
+ATR_PERIOD = 20
+K_ATR = 2.0              # "big" multiplier (you can change)
+UPTAIL_MAX_RATIO = 0.7   # upTail < 0.7 * size
+PREV3_MIN_RATIO = 0.5    # moving sum prev3 >= 0.5 * body
+BUFFER_RATIO = 0.01      # initial stop buffer = BUFFER_RATIO * bar_size (1% of bar size)
+INITIAL_CASH = 100000    # starting equity for backtest
+COMMISSION = 0.0         # per your request: set to 0 for first test (no commissions)
+TRADE_ON_CLOSE = True    # enter at bar close (tries to simulate entry at close)
+
+# -------------------------
+# Big Bar Strategy (All-in)
+# -------------------------
+class BigBarAllIn(Strategy):
+    # Strategy parameters (optimizable)
+    atr_period = 20
+    k_atr = 2.0
+    uptail_max_ratio = 0.7
+    prev3_min_ratio = 0.5
+    buffer_ratio = 0.01
+    
+    def init(self):
+        # prepare internal tracking arrays / state
+        self.trades_log = []   # list of dicts {entry_time, exit_time, entry_price, exit_price, size, pnl}
+        self._in_trade = False
+        self._entry_price = None
+        self._entry_size = None
+        self._entry_index = None
+        self._entry_bar_high = None
+        self._entry_bar_low = None
+        self._bars_since_entry = 0
+        self._current_stop = None
+
+    def next(self):
+        # require enough lookback for ATR and prev3 checks
+        if len(self.data.Close) < (self.atr_period + 5):
+            return
+
+        i = len(self.data.Close) - 1
+        open_p = float(self.data.Open[-1])
+        high_p = float(self.data.High[-1])
+        low_p = float(self.data.Low[-1])
+        close_p = float(self.data.Close[-1])
+        size = high_p - low_p
+        body = abs(close_p - open_p)
+        atr = float(self.data.df['ATR'].iat[i])  # ATR precomputed as column
+
+        # --- if currently not in a trade, check entry conditions ---
+        if not self.position:
+            # need at least 3 previous bars for prev3 sum
+            try:
+                prev3_sum = (
+                    (float(self.data.Close[-2]) - float(self.data.Open[-2])) +
+                    (float(self.data.Close[-3]) - float(self.data.Open[-3])) +
+                    (float(self.data.Close[-4]) - float(self.data.Open[-4]))
+                )
+            except Exception:
+                return
+
+            # Big bar magnitude and green bar
+            cond_green = close_p > open_p
+            cond_size = (size >= self.k_atr * atr) if (not math.isnan(atr) and atr > 0) else False
+            cond_prev3 = (prev3_sum >= self.prev3_min_ratio * body)
+            cond_uptail = ( (high_p - close_p) < (self.uptail_max_ratio * size) )
+
+            if cond_green and cond_size and cond_prev3 and cond_uptail:
+                # Enter all-in: size units = floor(equity / price)
+                equity = self.equity  # dynamic
+                if equity <= 0 or close_p <= 0:
+                    return
+                units = int(equity / close_p)
+                if units < 1:
+                    return
+
+                # Place entry (market at close because trade_on_close=True)
+                # We record entry details and rely on our own stop monitoring.
+                self.buy(size=units)
+                self._in_trade = True
+                self._entry_price = close_p
+                self._entry_size = units
+                self._entry_index = i
+                self._entry_bar_high = high_p
+                self._entry_bar_low = low_p
+                self._bars_since_entry = 0
+                # initial stop just below the low of entry bar
+                self._current_stop = low_p - (self.buffer_ratio * size)
+                # store partial metadata in case we want to export later
+                return
+
+        # --- if in a position, monitor exit conditions & trailing stop ---
+        if self.position:
+            # increment bars-since-entry (first bar after entry will see 1)
+            self._bars_since_entry += 1
+
+            # current bar's metrics
+            prev_bar_high = float(self.data.High[-1])
+            prev_bar_low = float(self.data.Low[-1])
+            prev_bar_close = float(self.data.Close[-1])
+            prev_bar_open = float(self.data.Open[-1])
+
+            # 1) Two-bar immediate exit rule: If this is the first bar after entry (bars_since_entry == 1)
+            #    and it is red OR did not make a new high (i.e., this bar high <= entry_bar_high), exit at this bar close.
+            if self._bars_since_entry == 1:
+                is_red = prev_bar_close <= prev_bar_open
+                didnnot_new_high = (prev_bar_high <= self._entry_bar_high)
+                if is_red or didnnot_new_high:
+                    exit_price = prev_bar_close
+                    self._close_position_and_log(exit_price)
+                    return
+                else:
+                    # price improved; move initial stop up if appropriate but do not lower it below current
+                    potential_stop = prev_bar_low - (BUFFER_RATIO * (self._entry_bar_high - self._entry_bar_low))
+                    if potential_stop > self._current_stop:
+                        self._current_stop = potential_stop
+
+            # 2) After initial 2 bars, trailing stop = lowest low among previous 2 bars (sliding window)
+            if self._bars_since_entry >= 2:
+                # compute lowest low among previous 2 bars: [-1] and [-2]
+                try:
+                    low_1 = float(self.data.Low[-1])
+                    low_2 = float(self.data.Low[-2])
+                    trailing_stop = min(low_1, low_2)
+                except Exception:
+                    trailing_stop = self._current_stop
+
+                # only move stop up if it's higher than previous (never move stop down)
+                if trailing_stop > self._current_stop:
+                    self._current_stop = trailing_stop
+
+                # if current bar low breached our stop, exit at current close
+                if float(self.data.Low[-1]) <= self._current_stop:
+                    exit_price = float(self.data.Close[-1])
+                    self._close_position_and_log(exit_price)
+                    return
+
+    def _close_position_and_log(self, exit_price):
+        # Close the position and log the trade result (we assume single position only)
+        if not self.position:
+            return
+        # compute pnl in dollars for logging
+        pnl = (exit_price - self._entry_price) * self._entry_size
+        trade_record = {
+            'entry_index': self._entry_index,
+            'exit_index': len(self.data.Close) - 1,
+            'entry_price': self._entry_price,
+            'exit_price': exit_price,
+            'size': self._entry_size,
+            'pnl': pnl
+        }
+        self.trades_log.append(trade_record)
+        # execute close
+        self.position.close()
+        # reset trade state
+        self._in_trade = False
+        self._entry_price = None
+        self._entry_size = None
+        self._entry_index = None
+        self._entry_bar_high = None
+        self._entry_bar_low = None
+        self._bars_since_entry = 0
+        self._current_stop = None
+
+
+# -------------------
+# Helper & main
+# -------------------
+def run_backtest(filepath):
+    # load and prepare data
+    df = load_data(filepath)
+    if df is None:
+        raise SystemExit("Failed to load data")
+
+    # compute ATR and attach as column (pandas_ta usage)
+    df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=20)
+    # drop NaNs produced by ATR warm-up
+    df.dropna(inplace=True)
+
+    # run backtest: trade on close to attempt entry at close of signal bar
+    bt = Backtest(df, BigBarAllIn, cash=INITIAL_CASH, commission=COMMISSION, trade_on_close=TRADE_ON_CLOSE)
+    stats = bt.run()
+    # get strategy instance trades log from returned object: Backtest.run returns stats; to get trades_log we need to run using
+    # bt.run() returns a 'results' object inside backtest that holds 'strategy' instance (not always public).
+    # For reliability, we'll instead re-run with .run() while capturing the strategy via bt._strategy if available.
+    # Simpler: run again but record trades from returned strategy instance by using the 'run' method and capturing the
+    # 'strategy' attribute if present.
+
+    # Run backtest and get output
+    output = bt.run()
+    
+    # Extract trades directly from the backtest results
+    if hasattr(output, '_trades') and not output._trades.empty:
+        trades_df = output._trades[['EntryBar', 'ExitBar', 'EntryPrice', 'ExitPrice', 'Size', 'PnL']]
+        trades_df.columns = ['entry_index', 'exit_index', 'entry_price', 'exit_price', 'size', 'pnl']
+    else:
+        print("No trades were executed in this backtest.")
+        print(output)
+        return output, bt
+    trades_df.to_csv('bigbar_trades.csv', index=False)
+
+    # compute win rate and Kelly
+    pnl = trades_df['pnl'].values
+    n_trades = len(pnl)
+    wins = pnl[pnl > 0]
+    losses = pnl[pnl <= 0]
+    win_rate = len(wins) / n_trades if n_trades > 0 else float('nan')
+    avg_win = wins.mean() if len(wins) > 0 else 0.0
+    avg_loss = losses.mean() if len(losses) > 0 else 0.0  # avg_loss ≤ 0
+
+    # compute b = avg_win / |avg_loss|
+    if avg_loss == 0:
+        b = float('nan')
+        kelly = float('nan')
+    else:
+        b = (avg_win / abs(avg_loss)) if (avg_win and avg_loss != 0) else float('nan')
+        if not np.isfinite(b) or b == 0:
+            kelly = float('nan')
+        else:
+            p = win_rate
+            q = 1 - p
+            kelly = p - q / b
+
+    # print results
+    print(output)
+    return output, bt
+
+
+def optimize_strategy(filepath):
+    # load and prepare data
+    df = load_data(filepath)
+    if df is None:
+        raise SystemExit("Failed to load data")
+
+    # compute ATR and attach as column (pandas_ta usage)
+    df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=20)
+    # drop NaNs produced by ATR warm-up
+    df.dropna(inplace=True)
+
+    # run backtest: trade on close to attempt entry at close of signal bar
+    bt = Backtest(df, BigBarAllIn, cash=INITIAL_CASH, commission=COMMISSION, trade_on_close=TRADE_ON_CLOSE)
+    
+    # Define optimization parameters
+    optimize_result = bt.optimize(
+        k_atr=list(np.arange(1.5, 3.5, 0.5)),
+        uptail_max_ratio=list(np.arange(0.5, 0.9, 0.1)),
+        prev3_min_ratio=list(np.arange(0.3, 0.7, 0.1)),
+        buffer_ratio=list(np.arange(0.005, 0.02, 0.005)),
+        maximize='Return [%]',
+        constraint=lambda param: param.uptail_max_ratio > 0.5 and param.prev3_min_ratio > 0.3
+    )
+    
+    print("Optimization Results:")
+    print(optimize_result)
+    return optimize_result, bt
+
+
+def plot_strategy(filepath, filename='strategy_plot.html'):
+    _, bt = run_backtest(filepath)
+    bt.plot(filename=filename)
+    print(f"Plot saved as {filename}")
+
+
+def plot_heatmaps(filepath):
+    optimize_result, bt = optimize_strategy(filepath)
+    bt.plot(filename='optimization_plot.html')
+    print("Optimization plot saved as optimization_plot.html")
+    
+    # Plot heatmap of parameter combinations
+    try:
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+        
+        # Extract optimization data
+        results = bt.results._results
+        if hasattr(results, 'param') and hasattr(results, 'Return [%]'):
+            # Convert to DataFrame
+            params_df = pd.DataFrame([p._asdict() for p in results.param])
+            params_df['Return'] = results['Return [%]']
+            
+            # Plot heatmaps for key parameter pairs
+            plt.figure(figsize=(12, 8))
+            
+            # k_atr vs uptail_max_ratio
+            plt.subplot(2, 2, 1)
+            pivot = params_df.pivot('k_atr', 'uptail_max_ratio', 'Return')
+            sns.heatmap(pivot, annot=True, cmap='viridis', fmt='.1f')
+            plt.title('k_atr vs uptail_max_ratio')
+            
+            # k_atr vs prev3_min_ratio
+            plt.subplot(2, 2, 2)
+            pivot = params_df.pivot('k_atr', 'prev3_min_ratio', 'Return')
+            sns.heatmap(pivot, annot=True, cmap='viridis', fmt='.1f')
+            plt.title('k_atr vs prev3_min_ratio')
+            
+            # k_atr vs buffer_ratio
+            plt.subplot(2, 2, 3)
+            pivot = params_df.pivot('k_atr', 'buffer_ratio', 'Return')
+            sns.heatmap(pivot, annot=True, cmap='viridis', fmt='.1f')
+            plt.title('k_atr vs buffer_ratio')
+            
+            # uptail_max_ratio vs prev3_min_ratio
+            plt.subplot(2, 2, 4)
+            pivot = params_df.pivot('uptail_max_ratio', 'prev3_min_ratio', 'Return')
+            sns.heatmap(pivot, annot=True, cmap='viridis', fmt='.1f')
+            plt.title('uptail_max_ratio vs prev3_min_ratio')
+            
+            plt.tight_layout()
+            plt.savefig('parameter_heatmaps.png')
+            print("Parameter heatmaps saved as parameter_heatmaps.png")
+    except Exception as e:
+        print(f"Error plotting heatmaps: {e}")
+
+# -------------
+# CLI entrypoint
+# -------------
+if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Big Bar Trading Strategy")
+    parser.add_argument("filepath", help="Path to CSV data file", nargs='?', default='data.csv')
+    parser.add_argument("--no-optimize", action="store_true", help="Skip strategy optimization")
+    parser.add_argument("--no-plot", action="store_true", help="Skip strategy plotting")
+    parser.add_argument("--no-heatmaps", action="store_true", help="Skip parameter heatmap generation")
+    
+    args = parser.parse_args()
+    
+    # Run all actions by default
+    print(f"Running BigBarAllIn strategy on {args.filepath}...")
+    
+    # Run backtest
+    print("\n1. Running backtest...")
+    stats, bt = run_backtest(args.filepath)
+    
+    # Run optimization
+    if not args.no_optimize:
+        print("\n2. Running strategy optimization...")
+        optimize_result, bt_optimize = optimize_strategy(args.filepath)
+    
+    # Run plotting
+    if not args.no_plot:
+        print("\n3. Plotting strategy results...")
+        plot_strategy(args.filepath)
+    
+    # Run heatmap generation
+    if not args.no_optimize and not args.no_heatmaps:
+        print("\n4. Generating parameter heatmaps...")
+        plot_heatmaps(args.filepath)
+    
+    print("\nAll operations completed successfully!")
