@@ -251,7 +251,7 @@ def run_backtest(filepath):
     return output, bt
 
 
-def optimize_strategy(filepath):
+def optimize_strategy(filepath, return_heatmap=False):
     # load and prepare data
     df = load_data(filepath)
     if df is None:
@@ -266,18 +266,31 @@ def optimize_strategy(filepath):
     bt = Backtest(df, BigBarAllIn, cash=INITIAL_CASH, commission=COMMISSION, trade_on_close=TRADE_ON_CLOSE)
     
     # Define optimization parameters
-    optimize_result = bt.optimize(
-        k_atr=list(np.arange(1.5, 3.5, 0.5)),
-        uptail_max_ratio=list(np.arange(0.5, 0.9, 0.1)),
-        prev3_min_ratio=list(np.arange(0.3, 0.7, 0.1)),
-        buffer_ratio=list(np.arange(0.005, 0.02, 0.005)),
-        maximize='Return [%]',
-        constraint=lambda param: param.uptail_max_ratio > 0.5 and param.prev3_min_ratio > 0.3
-    )
-    
-    print("Optimization Results:")
-    print(optimize_result)
-    return optimize_result, bt
+    if return_heatmap:
+        optimize_result, heatmap = bt.optimize(
+            k_atr=list(np.arange(1.5, 3.5, 0.5)),
+            uptail_max_ratio=list(np.arange(0.5, 0.9, 0.1)),
+            prev3_min_ratio=list(np.arange(0.3, 0.7, 0.1)),
+            buffer_ratio=list(np.arange(0.005, 0.02, 0.005)),
+            maximize='Return [%]',
+            constraint=lambda param: param.uptail_max_ratio > 0.5 and param.prev3_min_ratio > 0.3,
+            return_heatmap=True
+        )
+        print("Optimization Results:")
+        print(optimize_result)
+        return optimize_result, bt, heatmap
+    else:
+        optimize_result = bt.optimize(
+            k_atr=list(np.arange(1.5, 3.5, 0.5)),
+            uptail_max_ratio=list(np.arange(0.5, 0.9, 0.1)),
+            prev3_min_ratio=list(np.arange(0.3, 0.7, 0.1)),
+            buffer_ratio=list(np.arange(0.005, 0.02, 0.005)),
+            maximize='Return [%]',
+            constraint=lambda param: param.uptail_max_ratio > 0.5 and param.prev3_min_ratio > 0.3
+        )
+        print("Optimization Results:")
+        print(optimize_result)
+        return optimize_result, bt
 
 
 def plot_strategy(filepath, filename='strategy_plot.html'):
@@ -287,52 +300,15 @@ def plot_strategy(filepath, filename='strategy_plot.html'):
 
 
 def plot_heatmaps(filepath):
-    optimize_result, bt = optimize_strategy(filepath)
-    bt.plot(filename='optimization_plot.html')
-    print("Optimization plot saved as optimization_plot.html")
+    # Run optimization with return_heatmap=True to get built-in heatmap support
+    optimize_result, bt, heatmap = optimize_strategy(filepath, return_heatmap=True)
     
-    # Plot heatmap of parameter combinations
+    # Use built-in heatmap plotting from backtesting.py
     try:
-        import matplotlib.pyplot as plt
-        import seaborn as sns
+        # Save heatmap as PNG using backtesting's built-in heatmap support
+        heatmap.plot().figure.savefig('parameter_heatmaps.png', bbox_inches='tight')
+        print("Parameter heatmaps saved as parameter_heatmaps.png")
         
-        # Extract optimization data
-        results = bt.results._results
-        if hasattr(results, 'param') and hasattr(results, 'Return [%]'):
-            # Convert to DataFrame
-            params_df = pd.DataFrame([p._asdict() for p in results.param])
-            params_df['Return'] = results['Return [%]']
-            
-            # Plot heatmaps for key parameter pairs
-            plt.figure(figsize=(12, 8))
-            
-            # k_atr vs uptail_max_ratio
-            plt.subplot(2, 2, 1)
-            pivot = params_df.pivot('k_atr', 'uptail_max_ratio', 'Return')
-            sns.heatmap(pivot, annot=True, cmap='viridis', fmt='.1f')
-            plt.title('k_atr vs uptail_max_ratio')
-            
-            # k_atr vs prev3_min_ratio
-            plt.subplot(2, 2, 2)
-            pivot = params_df.pivot('k_atr', 'prev3_min_ratio', 'Return')
-            sns.heatmap(pivot, annot=True, cmap='viridis', fmt='.1f')
-            plt.title('k_atr vs prev3_min_ratio')
-            
-            # k_atr vs buffer_ratio
-            plt.subplot(2, 2, 3)
-            pivot = params_df.pivot('k_atr', 'buffer_ratio', 'Return')
-            sns.heatmap(pivot, annot=True, cmap='viridis', fmt='.1f')
-            plt.title('k_atr vs buffer_ratio')
-            
-            # uptail_max_ratio vs prev3_min_ratio
-            plt.subplot(2, 2, 4)
-            pivot = params_df.pivot('uptail_max_ratio', 'prev3_min_ratio', 'Return')
-            sns.heatmap(pivot, annot=True, cmap='viridis', fmt='.1f')
-            plt.title('uptail_max_ratio vs prev3_min_ratio')
-            
-            plt.tight_layout()
-            plt.savefig('parameter_heatmaps.png')
-            print("Parameter heatmaps saved as parameter_heatmaps.png")
     except Exception as e:
         print(f"Error plotting heatmaps: {e}")
 
