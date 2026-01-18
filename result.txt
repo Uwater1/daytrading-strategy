@@ -1,17 +1,18 @@
 BigBarAllIn Strategy - Optimized Version
 ==================================================
-Running on example.csv...
+Running on gd5m.csv...
 
 Running optimized parallel optimization...
 Starting optimized parallel optimization with 16 workers...
 Preparing data for optimization with ATR periods 10-100...
+  ⚡ Data loading: 0.1095s
 Pre-computing ATR values for periods 10-100...
-ATR pre-computation completed in 0.1232 seconds
+ATR pre-computation completed in 0.6946 seconds
 Pre-computing week boundaries...
-Week boundary computation completed in 0.0041 seconds
-Restricted bars: 36 out of 1499 (2.4%)
-Data preparation completed in 0.1426 seconds
-Final data shape: (1400, 96)
+Week boundary computation completed in 0.0147 seconds
+Restricted bars: 192 out of 20328 (0.9%)
+Data preparation completed in 0.8433 seconds
+Final data shape: (20229, 97)
 Starting SAMBO optimization with 10 tries...
 Parameter ranges:
   atr_period: [10, 100]
@@ -19,67 +20,3 @@ Parameter ranges:
   uptail_max_ratio_int: [5, 9] (uptail_max_ratio: 0.5-0.9)
   previous_weight_int: [1, 8] (previous_weight: 0.1-0.8)
   buffer_ratio_int: [1, 1] (buffer_ratio: 0.01-0.01)
-
-SAMBO Optimization completed in 4.74 seconds
-
-Best Optimization Results:
-Start                     2025-09-08 06:15...
-End                       2025-09-15 07:50...
-Duration                      7 days 01:35:00
-Exposure Time [%]                       0.429
-Equity Final [$]                    99815.401
-Equity Peak [$]                    100000.000
-Return [%]                             -0.185
-Buy & Hold Return [%]                   1.465
-Return (Ann.) [%]                      -6.435
-Volatility (Ann.) [%]                   0.997
-CAGR [%]                               -6.377
-Sharpe Ratio                           -6.452
-Sortino Ratio                          -5.912
-Calmar Ratio                          -34.861
-Alpha [%]                              -0.179
-Beta                                   -0.004
-Max. Drawdown [%]                      -0.185
-Avg. Drawdown [%]                      -0.185
-Max. Drawdown Duration        6 days 01:45:00
-Avg. Drawdown Duration        6 days 01:45:00
-# Trades                                    3
-Win Rate [%]                            0.000
-Best Trade [%]                         -0.018
-Worst Trade [%]                        -0.089
-Avg. Trade [%]                         -0.063
-Max. Trade Duration           0 days 00:05:00
-Avg. Trade Duration           0 days 00:05:00
-Profit Factor                           0.000
-Expectancy [%]                         -0.063
-SQN                                    -2.778
-Kelly Criterion                           NaN
-_strategy                 BigBarAllIn(atr_...
-_equity_curve                             ...
-_trades                      Size  EntryBa...
-dtype: object
-
-Optimized Parameters (Integer Values):
-  atr_period: 30
-  k_atr_int: 35 (k_atr: 3.5)
-  uptail_max_ratio_int: 8 (uptail_max_ratio: 0.8)
-  previous_weight_int: 1 (previous_weight: 0.1)
-  buffer_ratio_int: 1 (buffer_ratio: 0.01)
-
-Best result found with parameters:
-  atr_period: 30
-  k_atr: 3.5
-  uptail_max_ratio: 0.8
-  previous_weight: 0.1
-  buffer_ratio: 0.01
-Running optimized backtest with ATR period 20...
-Pre-computing ATR values for periods 20-20...
-ATR pre-computation completed in 0.0014 seconds
-Pre-computing week boundaries...
-Week boundary computation completed in 0.0041 seconds
-Restricted bars: 36 out of 1499 (2.4%)
-Data preparation completed in 0.0063 seconds
-Trades saved to bigbar_trades.csv
-Plot saved as optimized_strategy_plot.html
-
-All operations completed successfully!

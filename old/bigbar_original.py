@@ -20,7 +20,6 @@ import math
 from numba import jit
 import time
 import warnings
-import os
 warnings.filterwarnings('ignore')
 
 # Check for required packages and provide helpful error messages
@@ -59,88 +58,14 @@ pd.set_option('display.float_format', lambda x: '%.3f' % x)
 
 # Global cache for precomputed data (minimal caching for actual bottlenecks)
 _data_cache = {}
-_prepared_cache = {}
-
-# Performance monitoring
-_performance_metrics = {
-    'data_loading_time': [],
-    'atr_computation_time': [],
-    'week_boundary_time': [],
-    'strategy_execution_time': [],
-    'total_optimization_time': []
-}
-
-def record_performance(metric_name, duration):
-    """Record performance metrics for monitoring improvements."""
-    if metric_name in _performance_metrics:
-        _performance_metrics[metric_name].append(duration)
-    
-    # Print real-time performance feedback
-    if metric_name == 'data_loading_time':
-        print(f"  ⚡ Data loading: {duration:.4f}s")
-    elif metric_name == 'atr_computation_time':
-        print(f"  ⚡ ATR computation: {duration:.4f}s")
-    elif metric_name == 'week_boundary_time':
-        print(f"  ⚡ Week boundaries: {duration:.4f}s")
-
-def get_performance_summary():
-    """Get summary of performance metrics."""
-    summary = {}
-    for metric, times in _performance_metrics.items():
-        if times:
-            summary[metric] = {
-                'avg': sum(times) / len(times),
-                'min': min(times),
-                'max': max(times),
-                'count': len(times)
-            }
-    return summary
-
-def print_performance_report():
-    """Print detailed performance report."""
-    print("\n" + "="*60)
-    print("PERFORMANCE OPTIMIZATION REPORT")
-    print("="*60)
-    
-    summary = get_performance_summary()
-    
-    for metric, stats in summary.items():
-        print(f"\n{metric.replace('_', ' ').title()}:")
-        print(f"  Average: {stats['avg']:.4f}s")
-        print(f"  Best:    {stats['min']:.4f}s")
-        print(f"  Worst:   {stats['max']:.4f}s")
-        print(f"  Count:   {stats['count']}")
-    
-    # Calculate overall improvements
-    if 'data_loading_time' in summary:
-        avg_load_time = summary['data_loading_time']['avg']
-        print(f"\n📊 Data Loading Efficiency:")
-        print(f"  Expected improvement: 10-20% faster vs original")
-        print(f"  Current average: {avg_load_time:.4f}s")
-    
-    if 'atr_computation_time' in summary:
-        avg_atr_time = summary['atr_computation_time']['avg']
-        print(f"\n📊 ATR Computation Efficiency:")
-        print(f"  Expected improvement: 50-80% faster vs original")
-        print(f"  Current average: {avg_atr_time:.4f}s")
-    
-    if 'week_boundary_time' in summary:
-        avg_week_time = summary['week_boundary_time']['avg']
-        print(f"\n📊 Week Boundary Efficiency:")
-        print(f"  Expected improvement: 10-20% faster vs original")
-        print(f"  Current average: {avg_week_time:.4f}s")
-    
-    print("\n" + "="*60)
 
 def load_data(filepath):
     """
-    Optimized data loading with single-copy strategy.
-    Eliminates redundant DataFrame copies while maintaining thread safety.
+    Optimized data loading without unnecessary LRU caching.
+    For single-file operations, direct loading is faster than caching.
     """
     if filepath in _data_cache:
         return _data_cache[filepath]
-    
-    start_time = time.time()
     
     try:
         df = pd.read_csv(filepath)
@@ -154,16 +79,12 @@ def load_data(filepath):
         df = df[~df.index.duplicated(keep='first')]
         df.sort_index(inplace=True)
         
-        # Store reference, not copy - eliminates redundant copying
-        _data_cache[filepath] = df
-        return df
+        # Cache the loaded data
+        _data_cache[filepath] = df.copy()
+        return df.copy()
     except Exception as e:
         print(f"Failed to load data from {filepath}: {e}")
         return None
-    finally:
-        # Record performance metric
-        load_time = time.time() - start_time
-        record_performance('data_loading_time', load_time)
 
 def precompute_atr_values(df, min_period=10, max_period=100):
     """
@@ -189,38 +110,10 @@ def precompute_atr_values(df, min_period=10, max_period=100):
     print(f"ATR pre-computation completed in {elapsed:.4f} seconds")
     return df
 
-
-def compute_atr_lazy(df, period):
-    """
-    Lazy ATR computation that only calculates when needed.
-    Tracks computed periods to avoid redundant calculations.
-    
-    Args:
-        df: DataFrame with High, Low, Close columns
-        period: ATR period to compute
-    
-    Returns:
-        Series with ATR values for the specified period
-    """
-    column_name = f'ATR_{period}'
-    
-    # Check if already computed
-    if column_name in df.columns:
-        return df[column_name]
-    
-    # Compute ATR and cache it
-    print(f"Computing ATR_{period}...")
-    start_time = time.time()
-    df[column_name] = ta.atr(df['High'], df['Low'], df['Close'], length=period)
-    elapsed = time.time() - start_time
-    print(f"ATR_{period} computation completed in {elapsed:.4f} seconds")
-    
-    return df[column_name]
-
 def precompute_week_boundaries(df):
     """
     Pre-compute week boundary restrictions as DataFrame columns.
-    Optimized to eliminate duplicate .isocalendar() calls and expensive operations.
+    This eliminates expensive index hashing and cached function calls.
     
     Args:
         df: DataFrame with datetime index
@@ -231,33 +124,25 @@ def precompute_week_boundaries(df):
     print("Pre-computing week boundaries...")
     start_time = time.time()
     
-    # Calculate week information efficiently - only call isocalendar() once
-    isocalendar_data = df.index.isocalendar()
-    week_number = isocalendar_data.week
-    year = isocalendar_data.year
+    # Calculate week information
+    week_number = df.index.isocalendar().week
+    year = df.index.isocalendar().year
     week_id = year * 100 + week_number
     
-    # Create week_id series for efficient grouping
-    week_id_series = pd.Series(week_id, index=df.index)
-    
-    # Group by week and calculate bar positions efficiently
-    week_groups = week_id_series.groupby(week_id)
+    # Group by week and calculate bar positions
+    week_groups = pd.Series(week_id, index=df.index).groupby(week_id)
     bar_in_week = week_groups.cumcount()
     
-    # Get total bars per week efficiently
+    # Get total bars per week
     week_total_bars = week_groups.size()
     week_total_bars_dict = week_total_bars.to_dict()
     
-    # Create restricted mask efficiently using vectorized operations
+    # Create restricted mask
     is_restricted = pd.Series(False, index=df.index)
-    
-    # Vectorized approach for better performance
     for week_id_val, total_bars in week_total_bars_dict.items():
-        week_mask = (week_id == week_id_val)
-        # Use vectorized operations instead of multiple boolean indexing
-        mask_early = week_mask & (bar_in_week < 6)
-        mask_late = week_mask & (bar_in_week >= (total_bars - 6))
-        is_restricted = is_restricted | mask_early | mask_late
+        week_mask = week_id == week_id_val
+        is_restricted[week_mask & (bar_in_week < 6)] = True
+        is_restricted[week_mask & (bar_in_week >= (total_bars - 6))] = True
     
     df['is_restricted'] = is_restricted
     
@@ -298,10 +183,6 @@ class BigBarAllIn(Strategy):
         self._bars_since_entry = 0
         self._current_stop = None
         self._position_direction = None
-        
-        # Cache column references to avoid repeated string formatting
-        self._atr_column = f'ATR_{self.atr_period}'
-        self._is_restricted_column = 'is_restricted'
 
     def next(self):
         """Main trading logic executed on each bar"""
@@ -316,7 +197,7 @@ class BigBarAllIn(Strategy):
             return
 
         i = len(self.data.Close) - 1
-        is_restricted = self.data.df[self._is_restricted_column].iat[i]
+        is_restricted = self.data.df['is_restricted'].iat[i]
         
         # Close position if in restricted period
         if self.position and is_restricted:
@@ -331,7 +212,7 @@ class BigBarAllIn(Strategy):
         close_p = self.data.Close[-1]
         size = high_p - low_p
         body = abs(close_p - open_p)
-        atr = self.data.df[self._atr_column].iat[i]
+        atr = self.data.df[f'ATR_{self.atr_period}'].iat[i]
 
         # Entry conditions (not in position and not restricted)
         if not self.position and not is_restricted:
@@ -548,100 +429,6 @@ def prepare_data_for_optimization(filepath, min_atr_period=10, max_atr_period=10
     print(f"Final data shape: {df.shape}")
     
     return df
-
-
-def prepare_data_pipeline(filepath, min_atr_period=10, max_atr_period=100):
-    """
-    Create a reusable data preparation pipeline.
-    Eliminates redundant ATR calculations across multiple backtests.
-    
-    Args:
-        filepath: Path to CSV data file
-        min_atr_period: Minimum ATR period for optimization
-        max_atr_period: Maximum ATR period for optimization
-    
-    Returns:
-        Prepared DataFrame with all pre-computed values
-    """
-    # Check if we already have prepared data cached
-    cache_key = f"{filepath}_{min_atr_period}_{max_atr_period}"
-    if cache_key in _prepared_cache:
-        return _prepared_cache[cache_key]
-    
-    # Prepare data once and cache it
-    df = prepare_data_for_optimization(filepath, min_atr_period, max_atr_period)
-    
-    # Store in prepared cache for reuse
-    _prepared_cache[cache_key] = df
-    return df
-
-
-def run_batch_backtests(filepath, parameter_sets, batch_size=10):
-    """
-    Run multiple backtests efficiently using batch processing.
-    Maximizes data reuse across related backtests.
-    
-    Args:
-        filepath: Path to CSV data file
-        parameter_sets: List of parameter dictionaries for backtests
-        batch_size: Number of backtests to run in each batch
-    
-    Returns:
-        List of results from all backtests
-    """
-    print(f"Running batch backtests with {len(parameter_sets)} parameter sets...")
-    start_time = time.time()
-    
-    # Prepare data once for the entire batch
-    df = prepare_data_pipeline(filepath)
-    
-    results = []
-    for i in range(0, len(parameter_sets), batch_size):
-        batch = parameter_sets[i:i+batch_size]
-        print(f"Processing batch {i//batch_size + 1}/{(len(parameter_sets)-1)//batch_size + 1}")
-        
-        # Process batch with shared data
-        batch_results = process_batch(df, batch)
-        results.extend(batch_results)
-    
-    elapsed = time.time() - start_time
-    print(f"Batch backtesting completed in {elapsed:.4f} seconds")
-    
-    return results
-
-
-def process_batch(df, parameter_sets):
-    """
-    Process a batch of parameter sets with shared data.
-    
-    Args:
-        df: Prepared DataFrame with pre-computed values
-        parameter_sets: List of parameter dictionaries
-    
-    Returns:
-        List of results from the batch
-    """
-    results = []
-    
-    for params in parameter_sets:
-        try:
-            # Create backtest with pre-computed data
-            bt = Backtest(df, BigBarAllIn, cash=INITIAL_CASH, commission=COMMISSION, trade_on_close=TRADE_ON_CLOSE)
-            
-            stats = bt.run(
-                atr_period=params.get('atr_period', ATR_PERIOD),
-                k_atr_int=params.get('k_atr_int', 20),
-                uptail_max_ratio_int=params.get('uptail_max_ratio_int', 7),
-                previous_weight_int=params.get('previous_weight_int', 1),
-                buffer_ratio_int=params.get('buffer_ratio_int', 1)
-            )
-            
-            results.append((params, stats))
-        except Exception as e:
-            print(f"Error running backtest with params {params}: {e}")
-            results.append((params, None))
-    
-    return results
 
 
 def run_backtest_single_param_optimized(param_tuple):
