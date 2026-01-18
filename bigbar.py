@@ -76,6 +76,15 @@ class BigBarAllIn(Strategy):
 
         i = len(self.data.Close) - 1
         
+        # Check if current bar is restricted (first 6 or last 6 of week)
+        is_restricted = self.data.df['is_restricted'].iat[i]
+        
+        # If in a trade and current bar is restricted, close position
+        if self.position and is_restricted:
+            exit_price = self.data.Close[-1]
+            self._close_position_and_log(exit_price)
+            return
+        
         # Get current bar data without repeated float() conversions
         open_p = self.data.Open[-1]
         high_p = self.data.High[-1]
@@ -86,7 +95,7 @@ class BigBarAllIn(Strategy):
         atr = self.data.df[f'ATR_{self.atr_period}'].iat[i]
 
         # --- if currently not in a trade, check entry conditions ---
-        if not self.position:
+        if not self.position and not is_restricted:
             # need at least 3 previous bars for weighted index calculation
             try:
                 # Weights: 1 (farthest), 2 (middle), 3 (closest)
@@ -290,6 +299,31 @@ def run_backtest(filepath, print_result=True, atr_period=ATR_PERIOD):
     df[f'ATR_{atr_period}'] = ta.atr(df['High'], df['Low'], df['Close'], length=atr_period)
     # drop NaNs produced by ATR warm-up
     df.dropna(inplace=True)
+    
+    # Precompute week boundary information (first 6 and last 6 bars of each week)
+    df['week_number'] = df.index.isocalendar().week
+    df['year'] = df.index.isocalendar().year
+    
+    # Create a unique identifier for each week (year + week number)
+    df['week_id'] = df['year'] * 100 + df['week_number']
+    
+    # For each week, compute position of each bar (0 to N-1)
+    df['bar_in_week'] = df.groupby('week_id').cumcount()
+    
+    # For each week, get total number of bars
+    week_total_bars = df.groupby('week_id').size()
+    
+    # Create a dictionary to map week_id to total bars
+    week_total_bars_dict = week_total_bars.to_dict()
+    
+    # Flag bars that are in first 6 or last 6 of the week
+    df['is_restricted'] = False
+    for week_id, total_bars in week_total_bars_dict.items():
+        # First 6 bars
+        first_6 = df['week_id'] == week_id
+        df.loc[first_6 & (df['bar_in_week'] < 6), 'is_restricted'] = True
+        # Last 6 bars
+        df.loc[first_6 & (df['bar_in_week'] >= (total_bars - 6)), 'is_restricted'] = True
 
     # run backtest: trade on close to attempt entry at close of signal bar
     bt = Backtest(df, BigBarAllIn, cash=INITIAL_CASH, commission=COMMISSION, trade_on_close=TRADE_ON_CLOSE)
@@ -305,6 +339,16 @@ def run_backtest(filepath, print_result=True, atr_period=ATR_PERIOD):
         trades_df['direction'] = trades_df['size'].apply(lambda x: 'long' if x > 0 else 'short')
         # Ensure size is always positive for display
         trades_df['size'] = trades_df['size'].abs()
+        
+        # Replace entry_index and exit_index with actual dates from df index
+        trades_df['entry_date'] = trades_df['entry_index'].apply(lambda idx: df.index[idx])
+        trades_df['exit_date'] = trades_df['exit_index'].apply(lambda idx: df.index[idx])
+        # Drop the index columns
+        trades_df = trades_df.drop(['entry_index', 'exit_index'], axis=1)
+        # Reorder columns to maintain similar structure but with dates instead of indices
+        trades_df = trades_df[['entry_date', 'exit_date', 'entry_price', 'exit_price', 'size', 'pnl', 'direction']]
+        # Format PnL to 2 decimal places
+        trades_df['pnl'] = trades_df['pnl'].round(2)
         
         trades_df.to_csv('bigbar_trades.csv', index=False)
     else:
