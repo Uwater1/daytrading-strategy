@@ -11,9 +11,11 @@ from multiprocessing import Pool, cpu_count
 import warnings
 warnings.filterwarnings('ignore')
 
+# Performance optimizations
 pd.set_option('mode.chained_assignment', None)
 pd.set_option('display.float_format', lambda x: '%.3f' % x)
 
+# Global cache for precomputed data
 _data_cache = {}
 _atr_cache = {}
 _week_cache = {}
@@ -43,6 +45,7 @@ def compute_atr_cached(high, low, close, period):
     result = ta.atr(high_series, low_series, close_series, length=period)
     if result is None or result.empty:
         return pd.Series([np.nan] * len(high_series))
+    # Convert to numpy array to avoid index alignment issues
     return result.values
 
 @jit(nopython=True)
@@ -96,6 +99,7 @@ def compute_week_boundaries_cached(index):
     _week_cache[index_hash] = is_restricted
     return is_restricted
 
+# Optimized parameters
 ATR_PERIOD = 20
 K_ATR = 2.0
 UPTAIL_MAX_RATIO = 0.7
@@ -376,10 +380,10 @@ def parallel_optimize_strategy(filepath, workers=None):
         workers = cpu_count()
     print(f"Using {workers} worker processes for parallel optimization")
     
-    # Load data first to avoid repeated loading in each worker
+    # Load data first to avoid重复 loading in each worker
     df = load_data(filepath)
     
-    # Precompute all ATR periods to avoid repeated calculation
+    # Precompute all ATR periods to avoid重复计算
     atr_periods = list(range(10, 101))
     for period in atr_periods:
         if f'ATR_{period}' not in df.columns:

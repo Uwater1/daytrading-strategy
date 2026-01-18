@@ -7,16 +7,14 @@ import math
 from functools import lru_cache
 from numba import jit, float64, int64, boolean
 import time
-from multiprocessing import Pool, cpu_count
 import warnings
 warnings.filterwarnings('ignore')
 
+# Performance optimizations
 pd.set_option('mode.chained_assignment', None)
-pd.set_option('display.float_format', lambda x: '%.3f' % x)
 
+# Global cache for precomputed data
 _data_cache = {}
-_atr_cache = {}
-_week_cache = {}
 
 @lru_cache(maxsize=20)
 def load_data_cached(filepath):
@@ -37,13 +35,7 @@ def load_data(filepath):
 
 @lru_cache(maxsize=100)
 def compute_atr_cached(high, low, close, period):
-    high_series = pd.Series(high)
-    low_series = pd.Series(low)
-    close_series = pd.Series(close)
-    result = ta.atr(high_series, low_series, close_series, length=period)
-    if result is None or result.empty:
-        return pd.Series([np.nan] * len(high_series))
-    return result.values
+    return ta.atr(high, low, close, length=period)
 
 @jit(nopython=True)
 def calculate_weighted_sum_numba(close_values, open_values, body):
@@ -72,11 +64,7 @@ def check_entry_conditions_numba(open_p, high_p, low_p, close_p, size, body, atr
     return (cond_green, cond_size, cond_prev3_long, cond_uptail_long,
             cond_red, cond_prev3_short, cond_downtail_short)
 
-def compute_week_boundaries_cached(index):
-    index_hash = hash(tuple(index))
-    if index_hash in _week_cache:
-        return _week_cache[index_hash]
-    
+def compute_week_boundaries(index):
     week_number = index.isocalendar().week
     year = index.isocalendar().year
     week_id = year * 100 + week_number
@@ -93,7 +81,6 @@ def compute_week_boundaries_cached(index):
         is_restricted[week_mask & (bar_in_week < 6)] = True
         is_restricted[week_mask & (bar_in_week >= (total_bars - 6))] = True
     
-    _week_cache[index_hash] = is_restricted
     return is_restricted
 
 ATR_PERIOD = 20
@@ -250,8 +237,8 @@ class BigBarAllIn(Strategy):
             elif self._position_direction == 'short':
                 if self._bars_since_entry == 1:
                     is_green = prev_bar_close >= prev_bar_open
-                    didnnot_new_low = (prev_bar_low >= self._entry_bar_low)
-                    if is_green or didnnot_new_low:
+                    doesnnot_new_low = (prev_bar_low >= self._entry_bar_low)
+                    if is_green or doesnnot_new_low:
                         exit_price = prev_bar_close
                         self._close_position_and_log(exit_price)
                         return
@@ -306,160 +293,20 @@ class BigBarAllIn(Strategy):
         self._position_direction = None
 
 
-def run_backtest_single_param(param_tuple):
-    """
-    Helper function to run backtest with single parameter set - for parallel processing
-    """
-    filepath, params, atr_period = param_tuple
-    df = load_data(filepath)
-    
-    if df is None:
-        return None
-    
-    # Compute ATR for this specific period
-    if f'ATR_{atr_period}' not in df.columns:
-        df[f'ATR_{atr_period}'] = compute_atr_cached(tuple(df['High']), tuple(df['Low']), tuple(df['Close']), atr_period)
-    
-    # Make sure we have enough data after ATR calculation
-    temp_df = df.dropna(subset=[f'ATR_{atr_period}'])
-    if temp_df.empty:
-        return params, None
-    
-    temp_df['is_restricted'] = compute_week_boundaries_cached(temp_df.index)
-    
-    bt = Backtest(temp_df, BigBarAllIn, cash=INITIAL_CASH, commission=COMMISSION, trade_on_close=TRADE_ON_CLOSE)
-    
-    stats = bt.run(
-        atr_period=atr_period,
-        k_atr_int=params['k_atr_int'],
-        uptail_max_ratio_int=params['uptail_max_ratio_int'],
-        previous_weight_int=params['previous_weight_int'],
-        buffer_ratio_int=params['buffer_ratio_int']
-    )
-    
-    # Include atr_period in the params dictionary
-    complete_params = params.copy()
-    complete_params['atr_period'] = atr_period
-    
-    return complete_params, stats
-
-
-def generate_parameter_combinations():
-    """Generate all parameter combinations for parallel optimization"""
-    atr_periods = list(range(10, 101))
-    k_atr_int_values = list(range(10, 41))
-    uptail_ratios_int_values = list(range(5, 10))
-    previous_weights_int_values = list(range(1, 9))
-    buffer_ratio_int_values = [1]
-    
-    params_list = []
-    for atr_period in atr_periods:
-        for k_atr_int in k_atr_int_values:
-            for uptail_ratio_int in uptail_ratios_int_values:
-                for previous_weight_int in previous_weights_int_values:
-                    for buffer_ratio_int in buffer_ratio_int_values:
-                        params_list.append({
-                            'atr_period': atr_period,
-                            'k_atr_int': k_atr_int,
-                            'uptail_max_ratio_int': uptail_ratio_int,
-                            'previous_weight_int': previous_weight_int,
-                            'buffer_ratio_int': buffer_ratio_int
-                        })
-    return params_list
-
-
-def parallel_optimize_strategy(filepath, workers=None):
-    """
-    Parallel optimization using all available CPU cores
-    """
-    if workers is None:
-        workers = cpu_count()
-    print(f"Using {workers} worker processes for parallel optimization")
-    
-    # Load data first to avoid repeated loading in each worker
-    df = load_data(filepath)
-    
-    # Precompute all ATR periods to avoid repeated calculation
-    atr_periods = list(range(10, 101))
-    for period in atr_periods:
-        if f'ATR_{period}' not in df.columns:
-            df[f'ATR_{period}'] = compute_atr_cached(tuple(df['High']), tuple(df['Low']), tuple(df['Close']), period)
-    
-    # Generate all parameter combinations
-    param_combinations = generate_parameter_combinations()
-    print(f"Total parameter combinations to test: {len(param_combinations)}")
-    
-    # Create parameter tuples for parallel processing
-    param_tuples = [
-        (filepath, {
-            'k_atr_int': params['k_atr_int'],
-            'uptail_max_ratio_int': params['uptail_max_ratio_int'],
-            'previous_weight_int': params['previous_weight_int'],
-            'buffer_ratio_int': params['buffer_ratio_int']
-        }, params['atr_period'])
-        for params in param_combinations
-    ]
-    
-    # Run parallel backtests
-    results = []
-    start_time = time.time()
-    
-    with Pool(processes=workers) as pool:
-        chunk_size = max(1, len(param_tuples) // (workers * 4))
-        for i, result in enumerate(pool.imap_unordered(run_backtest_single_param, param_tuples, chunksize=chunk_size)):
-            if result is not None:
-                params, stats = result
-                results.append((params, stats))
-                
-            # Print progress
-            if (i + 1) % (len(param_tuples) // 10 or 1) == 0:
-                elapsed = time.time() - start_time
-                rate = (i + 1) / elapsed
-                remaining = (len(param_tuples) - (i + 1)) / rate
-                print(f"Progress: {i + 1}/{len(param_tuples)} | "
-                      f"Elapsed: {elapsed:.2f}s | "
-                      f"Rate: {rate:.1f} tests/s | "
-                      f"Remaining: {remaining:.2f}s")
-    
-    elapsed_time = time.time() - start_time
-    print(f"Optimization completed in {elapsed_time:.2f} seconds")
-    
-    # Find best result
-    best_result = None
-    best_return = -float('inf')
-    
-    for params, stats in results:
-        if stats is not None and hasattr(stats, 'get') and stats.get('Return [%]', -float('inf')) > best_return:
-            best_return = stats['Return [%]']
-            best_result = (params, stats)
-    
-    if best_result:
-        params, stats = best_result
-        print("\nBest Optimization Results:")
-        print(stats)
-        print(f"\nOptimized Parameters:")
-        print(f"  atr_period: {params['atr_period']}")
-        print(f"  k_atr: {params['k_atr_int'] / 10}")
-        print(f"  uptail_max_ratio: {params['uptail_max_ratio_int'] / 10}")
-        print(f"  previous_weight: {params['previous_weight_int'] / 10}")
-        print(f"  buffer_ratio: {params['buffer_ratio_int'] / 100}")
-    
-    return best_result, results
-
-
 def run_backtest(filepath, print_result=True, atr_period=ATR_PERIOD):
     df = load_data(filepath)
     if df is None:
         raise SystemExit("Failed to load data")
 
+    # Compute ATR with proper handling
     df[f'ATR_{atr_period}'] = compute_atr_cached(tuple(df['High']), tuple(df['Low']), tuple(df['Close']), atr_period)
-    temp_df = df.dropna(subset=[f'ATR_{atr_period}'])
-    if temp_df.empty:
-        raise SystemExit(f"Not enough data after ATR({atr_period}) calculation")
-        
-    temp_df['is_restricted'] = compute_week_boundaries_cached(temp_df.index)
+    
+    # Only drop NaN values from ATR column, keep other data
+    df = df.dropna(subset=[f'ATR_{atr_period}'])
+    
+    df['is_restricted'] = compute_week_boundaries(df.index)
 
-    bt = Backtest(temp_df, BigBarAllIn, cash=INITIAL_CASH, commission=COMMISSION, trade_on_close=TRADE_ON_CLOSE)
+    bt = Backtest(df, BigBarAllIn, cash=INITIAL_CASH, commission=COMMISSION, trade_on_close=TRADE_ON_CLOSE)
     stats = bt.run(
         atr_period=atr_period,
         k_atr_int=20,
@@ -490,88 +337,85 @@ def run_backtest(filepath, print_result=True, atr_period=ATR_PERIOD):
     return stats, bt
 
 
-def optimize_strategy(filepath, return_heatmap=True, parallel=True):
-    if parallel:
-        return parallel_optimize_strategy(filepath)
+def optimize_strategy(filepath, return_heatmap=True):
+    df = load_data(filepath)
+    if df is None:
+        raise SystemExit("Failed to load data")
+
+    atr_periods = [10, 100]
+    k_atr_int_values = [10, 40]  
+    uptail_ratios_int_values = [5, 9]  
+    previous_weights_int_values = [1, 8]  
+    buffer_ratio_int_values = [1]  
+    
+    min_atr_period = min(atr_periods)
+    max_atr_period = max(atr_periods)
+    for period in range(min_atr_period, max_atr_period + 1):
+        df[f'ATR_{period}'] = ta.atr(df['High'], df['Low'], df['Close'], length=period)
+    
+    df.dropna(inplace=True)
+    
+    df['week_number'] = df.index.isocalendar().week
+    df['year'] = df.index.isocalendar().year
+    df['week_id'] = df['year'] * 100 + df['week_number']
+    df['bar_in_week'] = df.groupby('week_id').cumcount()
+    week_total_bars = df.groupby('week_id').size()
+    week_total_bars_dict = week_total_bars.to_dict()
+    df['is_restricted'] = False
+    for week_id, total_bars in week_total_bars_dict.items():
+        first_6 = df['week_id'] == week_id
+        df.loc[first_6 & (df['bar_in_week'] < 6), 'is_restricted'] = True
+        df.loc[first_6 & (df['bar_in_week'] >= (total_bars - 6)), 'is_restricted'] = True
+
+    bt = Backtest(df, BigBarAllIn, cash=INITIAL_CASH, commission=COMMISSION, trade_on_close=TRADE_ON_CLOSE)
+    
+    if return_heatmap:
+        optimize_result, heatmap = bt.optimize(
+            atr_period=atr_periods,
+            k_atr_int=k_atr_int_values,
+            uptail_max_ratio_int=uptail_ratios_int_values,
+            previous_weight_int=previous_weights_int_values,
+            buffer_ratio_int=buffer_ratio_int_values,
+            maximize='Return [%]',
+            constraint=lambda param: param.uptail_max_ratio_int > 5 and param.previous_weight_int > 0,
+            return_heatmap=True,
+            method='sambo'
+        )
+        print("Optimization Results:")
+        print(optimize_result)
+        
+        st = optimize_result._strategy
+        print(f"\nOptimized Parameters:")
+        print(f"  atr_period: {st.atr_period}")
+        print(f"  k_atr: {st.k_atr_int / 10}")
+        print(f"  uptail_max_ratio: {st.uptail_max_ratio_int / 10}")
+        print(f"  previous_weight: {st.previous_weight_int / 10}")
+        print(f"  buffer_ratio: {st.buffer_ratio_int / 100}")
+        
+        return optimize_result, bt, heatmap
     else:
-        df = load_data(filepath)
-        if df is None:
-            raise SystemExit("Failed to load data")
-
-        atr_periods = [10, 100]
-        k_atr_int_values = [10, 40]  
-        uptail_ratios_int_values = [5, 9]  
-        previous_weights_int_values = [1, 8]  
-        buffer_ratio_int_values = [1]  
+        optimize_result = bt.optimize(
+            atr_period=atr_periods,
+            k_atr_int=k_atr_int_values,
+            uptail_max_ratio_int=uptail_ratios_int_values,
+            previous_weight_int=previous_weights_int_values,
+            buffer_ratio_int=buffer_ratio_int_values,
+            maximize='Return [%]',
+            constraint=lambda param: param.uptail_max_ratio_int > 5 and param.previous_weight_int > 0,
+            method='sambo'
+        )
+        print("Optimization Results:")
+        print(optimize_result)
         
-        min_atr_period = min(atr_periods)
-        max_atr_period = max(atr_periods)
-        for period in range(min_atr_period, max_atr_period + 1):
-            df[f'ATR_{period}'] = ta.atr(df['High'], df['Low'], df['Close'], length=period)
+        st = optimize_result._strategy
+        print(f"\nOptimized Parameters:")
+        print(f"  atr_period: {st.atr_period}")
+        print(f"  k_atr: {st.k_atr_int / 10}")
+        print(f"  uptail_max_ratio: {st.uptail_max_ratio_int / 10}")
+        print(f"  previous_weight: {st.previous_weight_int / 10}")
+        print(f"  buffer_ratio: {st.buffer_ratio_int / 100}")
         
-        df.dropna(inplace=True)
-        
-        df['week_number'] = df.index.isocalendar().week
-        df['year'] = df.index.isocalendar().year
-        df['week_id'] = df['year'] * 100 + df['week_number']
-        df['bar_in_week'] = df.groupby('week_id').cumcount()
-        week_total_bars = df.groupby('week_id').size()
-        week_total_bars_dict = week_total_bars.to_dict()
-        df['is_restricted'] = False
-        for week_id, total_bars in week_total_bars_dict.items():
-            first_6 = df['week_id'] == week_id
-            df.loc[first_6 & (df['bar_in_week'] < 6), 'is_restricted'] = True
-            df.loc[first_6 & (df['bar_in_week'] >= (total_bars - 6)), 'is_restricted'] = True
-
-        bt = Backtest(df, BigBarAllIn, cash=INITIAL_CASH, commission=COMMISSION, trade_on_close=TRADE_ON_CLOSE)
-        
-        if return_heatmap:
-            optimize_result, heatmap = bt.optimize(
-                atr_period=atr_periods,
-                k_atr_int=k_atr_int_values,
-                uptail_max_ratio_int=uptail_ratios_int_values,
-                previous_weight_int=previous_weights_int_values,
-                buffer_ratio_int=buffer_ratio_int_values,
-                maximize='Return [%]',
-                constraint=lambda param: param.uptail_max_ratio_int > 5 and param.previous_weight_int > 0,
-                return_heatmap=True,
-                method='sambo'
-            )
-            print("Optimization Results:")
-            print(optimize_result)
-            
-            st = optimize_result._strategy
-            print(f"\nOptimized Parameters:")
-            print(f"  atr_period: {st.atr_period}")
-            print(f"  k_atr: {st.k_atr_int / 10}")
-            print(f"  uptail_max_ratio: {st.uptail_max_ratio_int / 10}")
-            print(f"  previous_weight: {st.previous_weight_int / 10}")
-            print(f"  buffer_ratio: {st.buffer_ratio_int / 100}")
-            
-            return optimize_result, bt, heatmap
-        else:
-            optimize_result = bt.optimize(
-                atr_period=atr_periods,
-                k_atr_int=k_atr_int_values,
-                uptail_max_ratio_int=uptail_ratios_int_values,
-                previous_weight_int=previous_weights_int_values,
-                buffer_ratio_int=buffer_ratio_int_values,
-                maximize='Return [%]',
-                constraint=lambda param: param.uptail_max_ratio_int > 5 and param.previous_weight_int > 0,
-                method='sambo'
-            )
-            print("Optimization Results:")
-            print(optimize_result)
-            
-            st = optimize_result._strategy
-            print(f"\nOptimized Parameters:")
-            print(f"  atr_period: {st.atr_period}")
-            print(f"  k_atr: {st.k_atr_int / 10}")
-            print(f"  uptail_max_ratio: {st.uptail_max_ratio_int / 10}")
-            print(f"  previous_weight: {st.previous_weight_int / 10}")
-            print(f"  buffer_ratio: {st.buffer_ratio_int / 100}")
-            
-            return optimize_result, bt
+        return optimize_result, bt
 
 
 def plot_strategy(filepath, filename='strategy_plot.html'):
@@ -581,7 +425,7 @@ def plot_strategy(filepath, filename='strategy_plot.html'):
 
 
 def plot_heatmaps(filepath):
-    optimize_result, bt, heatmap = optimize_strategy(filepath, return_heatmap=True, parallel=False)
+    optimize_result, bt, heatmap = optimize_strategy(filepath, return_heatmap=True)
     
     try:
         import matplotlib
@@ -605,41 +449,18 @@ if __name__ == "__main__":
     parser.add_argument("--no-optimize", action="store_true", help="Skip strategy optimization")
     parser.add_argument("--no-plot", action="store_true", help="Skip strategy plotting")
     parser.add_argument("--no-heatmaps", action="store_true", help="Skip parameter heatmap generation")
-    parser.add_argument("--no-parallel", action="store_true", help="Use sequential optimization instead of parallel")
-    parser.add_argument("--workers", type=int, help="Number of worker processes to use (default: all available cores)")
     
     args = parser.parse_args()
     
     print(f"Running BigBarAllIn strategy on {args.filepath}...")
     
     if not args.no_optimize:
-        if args.no_parallel:
-            print("Running sequential optimization...")
-            optimize_result, bt, heatmap = optimize_strategy(args.filepath, return_heatmap=True, parallel=False)
-        else:
-            print("Running parallel optimization...")
-            best_result, all_results = parallel_optimize_strategy(args.filepath, args.workers)
-            if best_result:
-                params, optimize_result = best_result
-                # Run backtest with best parameters to get bt object for plotting
-                df = load_data(args.filepath)
-                df[f'ATR_{params["atr_period"]}'] = compute_atr_cached(tuple(df['High']), tuple(df['Low']), tuple(df['Close']), params['atr_period'])
-                df.dropna(inplace=True)
-                df['is_restricted'] = compute_week_boundaries_cached(df.index)
-                bt = Backtest(df, BigBarAllIn, cash=INITIAL_CASH, commission=COMMISSION, trade_on_close=TRADE_ON_CLOSE)
-                # Need to run to get the backtest object in a state that can be plotted
-                bt.run(
-                    atr_period=params['atr_period'],
-                    k_atr_int=params['k_atr_int'],
-                    uptail_max_ratio_int=params['uptail_max_ratio_int'],
-                    previous_weight_int=params['previous_weight_int'],
-                    buffer_ratio_int=params['buffer_ratio_int']
-                )
+        optimize_result, bt, heatmap = optimize_strategy(args.filepath, return_heatmap=True)
         
         if not args.no_plot:
             bt.plot(filename='optimized_strategy_plot.html')
         
-        if not args.no_heatmaps and args.no_parallel:
+        if not args.no_heatmaps:
             try:
                 from backtesting.lib import plot_heatmaps
                 plot_heatmaps(heatmap, agg='mean')

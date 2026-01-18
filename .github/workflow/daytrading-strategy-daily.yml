@@ -1,0 +1,221 @@
+name: Daytrading Strategy daily run
+
+on:
+  # daily at 04:00 UTC (quiet time) - DISABLED
+  # schedule:
+  #   - cron: '0 4 * * *'
+  workflow_dispatch:
+
+env:
+  DATE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.date || '' }}
+
+jobs:
+  run-if-heikinashi-changed:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: read
+
+    steps:
+      - name: Checkout repository (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          
+      - name: Set DATE environment variable (UTC YYYY-MM-DD)
+        run: echo "DATE=$(date -u +%F)" >> $GITHUB_ENV
+
+      - id: check
+        name: Check whether bigbar.py was changed today (UTC)
+        run: |
+          # Ensure we have refs and full history
+          git fetch --no-tags --prune || true
+
+          # Use UTC midnight today as the "since" boundary
+          SINCE="$(date -u '+%Y-%m-%dT00:00:00Z')"
+          echo "Checking commits since $SINCE for changes to bigbar.py"
+
+          # Search commits since midnight UTC for file named exactly "bigbar.py"
+          if git log --since="$SINCE" --name-only --pretty=format: | grep -q '^bigbar.py$'; then
+            echo "bigbar.py changed since $SINCE"
+            echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "no change to bigbar.py since $SINCE"
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Python (only if changed)
+        if: steps.check.outputs.changed == 'true'
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies (only if changed and requirements.txt exists)
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            # Install most dependencies first
+            pip install -r requirements.txt
+            # Try to install sambo with error handling
+            pip uninstall sambo --break-system-packages -y
+            pip install 'sambo[all]' --break-system-packages || echo "Warning: sambo installation failed, will use fallback optimization method"
+          else
+            echo "requirements.txt not found; skipping pip install"
+          fi
+
+      - name: Run bigbar.py (only if changed)
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          # Fail fast if script or data missing
+          if [ ! -f bigbar.py ]; then
+            echo "bigbar.py not found" >&2
+            exit 1
+          fi
+          # Check for available data files
+          data_file=""
+          if [ -f example.csv ]; then
+            data_file="example.csv"
+          elif [ -f IVV.csv ]; then
+            data_file="IVV.csv"
+          elif [ -f gd5m.csv ]; then
+            data_file="gd5m.csv"
+          elif [ -f gold5min.csv ]; then
+            data_file="gold5min.csv"
+          else
+            echo "No suitable data file found (example.csv, IVV.csv, gd5m.csv, gold5min.csv)" >&2
+            exit 1
+          fi
+          echo "Using data file: $data_file"
+
+          # Run the script, capture stdout to dated .txt
+          python bigbar.py "$data_file" > daytrading_strategy_${DATE}.txt
+          echo "Wrote daytrading_strategy_${DATE}.txt"
+
+      - name: Write job summary (only if changed)
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          # $GITHUB_STEP_SUMMARY is a file path provided by GitHub Actions.
+          # Appending a small markdown summary here makes results visible in the "Job summary" UI.
+          echo "## Daytrading Strategy run summary for ${DATE}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Generated files:" >> $GITHUB_STEP_SUMMARY
+
+          if [ -f daytrading_strategy_${DATE}.txt ]; then
+            echo "  - daytrading_strategy_${DATE}.txt" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "  - (no text output)" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          shopt -s nullglob
+          html_files=( *_${DATE}.html *.html )
+          if [ ${#html_files[@]} -gt 0 ]; then
+            for f in "${html_files[@]}"; do
+              echo "  - ${f}" >> $GITHUB_STEP_SUMMARY
+            done
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Key output (first 200 lines of daytrading_strategy_${DATE}.txt)" >> $GITHUB_STEP_SUMMARY
+          if [ -f daytrading_strategy_${DATE}.txt ]; then
+            # Indent block so it renders as code in the summary
+            head -n 200 daytrading_strategy_${DATE}.txt | sed 's/^/    /' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "_no text output_" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Print generated files to workflow logs (only if changed)
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          # Printing the main outputs into the workflow logs makes them available in the run logs
+          # (useful if you want to avoid downloading artifacts).
+          echo "=== Begin daytrading_strategy_${DATE}.txt (showing up to 500 lines) ==="
+          if [ -f daytrading_strategy_${DATE}.txt ]; then
+            sed -n '1,500p' daytrading_strategy_${DATE}.txt
+          else
+            echo "(no text output)"
+          fi
+          echo "=== End daytrading_strategy_${DATE}.txt ==="
+
+          shopt -s nullglob
+          for f in *_${DATE}.html *.html; do
+            echo "=== Begin $f (showing up to 250 lines) ==="
+            sed -n '1,250p' "$f" || echo "(unable to print $f)"
+            echo "=== End $f ==="
+          done
+
+      - name: Upload generated files as workflow artifact (only if changed)
+        if: steps.check.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: daytrading-strategy-${{ env.DATE }}
+          path: |
+            daytrading_strategy_${{ env.DATE }}*.txt
+            *.html
+            *.csv
+
+
+      - name: Handle duplicate files (add _new suffix if exists)
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          # Check if daytrading_strategy_${DATE}.txt already exists and rename if needed
+          if [ -f "daytrading_strategy_${DATE}.txt" ]; then
+            COUNTER=1
+            while [ -f "daytrading_strategy_${DATE}_new${COUNTER}.txt" ]; do
+              COUNTER=$((COUNTER + 1))
+            done
+            mv "daytrading_strategy_${DATE}.txt" "daytrading_strategy_${DATE}_new${COUNTER}.txt"
+            echo "Renamed existing file to daytrading_strategy_${DATE}_new${COUNTER}.txt"
+          fi
+          
+          # Check for duplicate HTML files and rename if needed
+          for f in *.html; do
+            if [ -f "$f" ]; then
+              base_name="${f%.html}"
+              COUNTER=1
+              while [ -f "${base_name}_new${COUNTER}.html" ]; do
+                COUNTER=$((COUNTER + 1))
+              done
+              mv "$f" "${base_name}_new${COUNTER}.html"
+              echo "Renamed existing $f to ${base_name}_new${COUNTER}.html"
+            fi
+          done
+
+      - name: Create GitHub Release and upload files (only if changed)
+        if: steps.check.outputs.changed == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Daytrading Strategy ${{ env.DATE }}
+          tag_name: daytrading-strategy-${{ env.DATE }}
+          body: |
+            Automated Daytrading Strategy analysis for ${{ env.DATE }}
+            
+            This release contains:
+            - Daytrading strategy analysis output (text file)
+            - Generated HTML charts
+            - Generated CSV trade files
+            
+            Generated by GitHub Actions workflow run #${{ github.run_number }}
+          files: |
+            daytrading_strategy_${{ env.DATE }}*.txt
+            *.html
+            *.csv
+            bigbar.py
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Optional: commit the generated file back to the repository.
+      # WARNING: enabling this will make the workflow push to the default branch.
+      # Uncomment and configure if you want the output committed automatically.
+      # - name: Commit and push generated file back to repo (optional)
+      #   if: steps.check.outputs.changed == 'true'
+      #   run: |
+      #     git config user.name "github-actions[bot]"
+      #     git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      #     git add daytrading_strategy_${DATE}.txt
+      #     git commit -m "Add daytrading strategy output for ${DATE} [ci skip]" || echo "Nothing to commit"
+      #     git push origin "HEAD:refs/heads/${GITHUB_REF#refs/heads/}"
+      #   env:
+      #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
