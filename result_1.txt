@@ -1,0 +1,45 @@
+Running BigBarAllIn strategy on gd5m.csv...
+Optimization Results:
+Start                     2025-06-30 00:25...
+End                       2025-10-09 19:25...
+Duration                    101 days 19:00:00
+Exposure Time [%]                     4.44357
+Equity Final [$]                   106041.563
+Equity Peak [$]                    106090.417
+Return [%]                            6.04156
+Buy & Hold Return [%]                21.71462
+Return (Ann.) [%]                    18.39808
+Volatility (Ann.) [%]                 4.38821
+CAGR [%]                             15.62981
+Sharpe Ratio                          4.19261
+Sortino Ratio                        14.17171
+Calmar Ratio                         23.87315
+Alpha [%]                             6.31261
+Beta                                 -0.01248
+Max. Drawdown [%]                    -0.77066
+Avg. Drawdown [%]                    -0.21336
+Max. Drawdown Duration       18 days 15:15:00
+Avg. Drawdown Duration        2 days 12:23:00
+# Trades                                  280
+Win Rate [%]                         43.57143
+Best Trade [%]                         1.0237
+Worst Trade [%]                      -0.27856
+Avg. Trade [%]                        0.02138
+Max. Trade Duration           2 days 01:25:00
+Avg. Trade Duration           0 days 00:23:00
+Profit Factor                         1.75452
+Expectancy [%]                        0.02148
+SQN                                   2.54964
+Kelly Criterion                       0.18655
+_strategy                 BigBarAllIn(atr_...
+_equity_curve                             ...
+_trades                        Size  Entry...
+dtype: object
+
+Optimized Parameters:
+  atr_period: 25
+  k_atr: 1.8
+  uptail_max_ratio: 0.8
+  prev3_min_ratio: 0.4
+
+All operations completed successfully!

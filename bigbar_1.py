@@ -53,7 +53,7 @@ class BigBarAllIn(Strategy):
     atr_period = 20
     k_atr = 2.0
     uptail_max_ratio = 0.7
-    previous_weight = 0.1  # New parameter to be optimized
+    prev3_min_ratio = 0.5
     buffer_ratio = 0.01
     
     def init(self):
@@ -87,29 +87,25 @@ class BigBarAllIn(Strategy):
 
         # --- if currently not in a trade, check entry conditions ---
         if not self.position:
-            # need at least 3 previous bars for weighted index calculation
+            # need at least 3 previous bars for prev3 sum
             try:
-                # Weights: 1 (farthest), 2 (middle), 3 (closest)
-                bar1 = (self.data.Close[-4] - self.data.Open[-4])  # t-4 (farthest)
-                bar2 = (self.data.Close[-3] - self.data.Open[-3])  # t-3 (middle)  
-                bar3 = (self.data.Close[-2] - self.data.Open[-2])  # t-2 (closest)
-                
-                weighted_sum = (1 * bar1) + (2 * bar2) + (3 * bar3)
+                prev3_sum = (
+                    (self.data.Close[-2] - self.data.Open[-2]) +
+                    (self.data.Close[-3] - self.data.Open[-3]) +
+                    (self.data.Close[-4] - self.data.Open[-4])
+                )
             except Exception:
                 return
-
-            # Normalize weighted sum by current bar body
-            normalized_weighted_sum = weighted_sum / body if body != 0 else 0
 
             # Big bar magnitude and green bar (long conditions)
             cond_green = close_p > open_p
             cond_size = (size >= self.k_atr * atr) if (not math.isnan(atr) and atr > 0) else False
-            cond_prev3_long = (normalized_weighted_sum >= self.previous_weight)
+            cond_prev3_long = (prev3_sum >= self.prev3_min_ratio * body)
             cond_uptail_long = ( (high_p - close_p) < (self.uptail_max_ratio * size) )
 
             # Big bar magnitude and red bar (short conditions)
             cond_red = close_p < open_p
-            cond_prev3_short = (normalized_weighted_sum <= -self.previous_weight)
+            cond_prev3_short = (prev3_sum <= -self.prev3_min_ratio * body)
             cond_downtail_short = ( (close_p - low_p) < (self.uptail_max_ratio * size) )
 
             if cond_green and cond_size and cond_prev3_long and cond_uptail_long:
@@ -329,7 +325,7 @@ def optimize_strategy(filepath, return_heatmap=True):
     atr_periods = [15, 20, 25, 30]
     k_atr_values = [1.8, 2.0, 2.2, 2.4]
     uptail_ratios = [0.6, 0.7, 0.8]
-    previous_weights = [0.1, 0.2, 0.3, 0.4, 0.5]  # New parameter range
+    prev3_ratios = [0.4, 0.5, 0.6]
     
     # Precompute only necessary ATR periods
     for period in atr_periods:
@@ -348,9 +344,9 @@ def optimize_strategy(filepath, return_heatmap=True):
             atr_period=atr_periods,
             k_atr=k_atr_values,
             uptail_max_ratio=uptail_ratios,
-            previous_weight=previous_weights,  # Replace prev3_min_ratio
+            prev3_min_ratio=prev3_ratios,
             maximize='Return [%]',
-            constraint=lambda param: param.uptail_max_ratio > 0.5 and param.previous_weight > 0.0,
+            constraint=lambda param: param.uptail_max_ratio > 0.5 and param.prev3_min_ratio > 0.3,
             return_heatmap=True
         )
         print("Optimization Results:")
@@ -362,7 +358,7 @@ def optimize_strategy(filepath, return_heatmap=True):
         print(f"  atr_period: {st.atr_period}")
         print(f"  k_atr: {st.k_atr}")
         print(f"  uptail_max_ratio: {st.uptail_max_ratio}")
-        print(f"  previous_weight: {st.previous_weight}")
+        print(f"  prev3_min_ratio: {st.prev3_min_ratio}")
         
         return optimize_result, bt, heatmap
     else:
@@ -370,9 +366,9 @@ def optimize_strategy(filepath, return_heatmap=True):
             atr_period=atr_periods,
             k_atr=k_atr_values,
             uptail_max_ratio=uptail_ratios,
-            previous_weight=previous_weights,  # Replace prev3_min_ratio
+            prev3_min_ratio=prev3_ratios,
             maximize='Return [%]',
-            constraint=lambda param: param.uptail_max_ratio > 0.5 and param.previous_weight > 0.0
+            constraint=lambda param: param.uptail_max_ratio > 0.5 and param.prev3_min_ratio > 0.3
         )
         print("Optimization Results:")
         print(optimize_result)
@@ -383,7 +379,7 @@ def optimize_strategy(filepath, return_heatmap=True):
         print(f"  atr_period: {st.atr_period}")
         print(f"  k_atr: {st.k_atr}")
         print(f"  uptail_max_ratio: {st.uptail_max_ratio}")
-        print(f"  previous_weight: {st.previous_weight}")
+        print(f"  prev3_min_ratio: {st.prev3_min_ratio}")
         
         return optimize_result, bt
 
