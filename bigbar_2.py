@@ -184,8 +184,8 @@ class BigBarAllIn(Strategy):
                 #    and it is red OR did not make a new high (i.e., this bar high <= entry_bar_high), exit at this bar close.
                 if self._bars_since_entry == 1:
                     is_red = prev_bar_close <= prev_bar_open
-                    didnnot_new_high = (prev_bar_high <= self._entry_bar_high)
-                    if is_red or didnnot_new_high:
+                    did_not_new_high = (prev_bar_high <= self._entry_bar_high)
+                    if is_red or did_not_new_high:
                         exit_price = prev_bar_close
                         self._close_position_and_log(exit_price)
                         return
@@ -221,8 +221,8 @@ class BigBarAllIn(Strategy):
                 #    and it is green OR did not make a new low (i.e., this bar low >= entry_bar_low), exit at this bar close.
                 if self._bars_since_entry == 1:
                     is_green = prev_bar_close >= prev_bar_open
-                    didnnot_new_low = (prev_bar_low >= self._entry_bar_low)
-                    if is_green or didnnot_new_low:
+                    did_not_new_low = (prev_bar_low >= self._entry_bar_low)
+                    if is_green or did_not_new_low:
                         exit_price = prev_bar_close
                         self._close_position_and_log(exit_price)
                         return
@@ -369,11 +369,11 @@ def optimize_strategy(filepath, return_heatmap=True):
     if df is None:
         raise SystemExit("Failed to load data")
 
-    # Reduced optimization grid for better performance
-    atr_periods = [15, 20, 25, 30]
-    k_atr_values = [1.8, 2.0, 2.2, 2.4]
-    uptail_ratios = [0.6, 0.7, 0.8]
-    previous_weights = [0.1, 0.2, 0.3, 0.4, 0.5]  # New parameter range
+    # Reduced optimization grid for better performance and to avoid buffer issues
+    atr_periods = [20]  # Single value to reduce complexity
+    k_atr_values = [2.0]  # Single value to reduce complexity
+    uptail_ratios = [0.7]  # Single value to reduce complexity
+    previous_weights = [0.2, 0.3]  # Only 2 values for heatmap
     
     # Precompute only necessary ATR periods
     for period in atr_periods:
@@ -382,21 +382,51 @@ def optimize_strategy(filepath, return_heatmap=True):
     # Drop NaNs based on maximum ATR period
     max_atr_period = max(atr_periods)
     df.dropna(inplace=True)
+    
+    # Precompute week boundary information (first 6 and last 6 bars of each week)
+    df['week_number'] = df.index.isocalendar().week
+    df['year'] = df.index.isocalendar().year
+    
+    # Create a unique identifier for each week (year + week number)
+    df['week_id'] = df['year'] * 100 + df['week_number']
+    
+    # For each week, compute position of each bar (0 to N-1)
+    df['bar_in_week'] = df.groupby('week_id').cumcount()
+    
+    # For each week, get total number of bars
+    week_total_bars = df.groupby('week_id').size()
+    
+    # Create a dictionary to map week_id to total bars
+    week_total_bars_dict = week_total_bars.to_dict()
+    
+    # Flag bars that are in first 6 or last 6 of the week
+    df['is_restricted'] = False
+    for week_id, total_bars in week_total_bars_dict.items():
+        # First 6 bars
+        first_6 = df['week_id'] == week_id
+        df.loc[first_6 & (df['bar_in_week'] < 6), 'is_restricted'] = True
+        # Last 6 bars
+        df.loc[first_6 & (df['bar_in_week'] >= (total_bars - 6)), 'is_restricted'] = True
 
     # run backtest: trade on close to attempt entry at close of signal bar
     bt = Backtest(df, BigBarAllIn, cash=INITIAL_CASH, commission=COMMISSION, trade_on_close=TRADE_ON_CLOSE)
     
     # Define optimization parameters
     if return_heatmap:
-        optimize_result, heatmap = bt.optimize(
-            atr_period=atr_periods,
-            k_atr=k_atr_values,
-            uptail_max_ratio=uptail_ratios,
-            previous_weight=previous_weights,  # Replace prev3_min_ratio
-            maximize='Return [%]',
-            constraint=lambda param: param.uptail_max_ratio > 0.5 and param.previous_weight > 0.0,
-            return_heatmap=True
-        )
+        try:
+            optimize_result, heatmap = bt.optimize(
+                atr_period=atr_periods,
+                k_atr=k_atr_values,
+                uptail_max_ratio=uptail_ratios,
+                previous_weight=previous_weights,  # Replace prev3_min_ratio
+                maximize='Return [%]',
+                constraint=lambda param: param.uptail_max_ratio > 0.5 and param.previous_weight > 0.0,
+                return_heatmap=True
+            )
+        except Exception as e:
+            print(f"Optimization with heatmap failed: {e}")
+            print("Trying optimization without heatmap...")
+            return optimize_strategy(filepath, return_heatmap=False)
         print("Optimization Results:")
         print(optimize_result)
         
@@ -410,14 +440,19 @@ def optimize_strategy(filepath, return_heatmap=True):
         
         return optimize_result, bt, heatmap
     else:
-        optimize_result = bt.optimize(
-            atr_period=atr_periods,
-            k_atr=k_atr_values,
-            uptail_max_ratio=uptail_ratios,
-            previous_weight=previous_weights,  # Replace prev3_min_ratio
-            maximize='Return [%]',
-            constraint=lambda param: param.uptail_max_ratio > 0.5 and param.previous_weight > 0.0
-        )
+        try:
+            optimize_result = bt.optimize(
+                atr_period=atr_periods,
+                k_atr=k_atr_values,
+                uptail_max_ratio=uptail_ratios,
+                previous_weight=previous_weights,  # Replace prev3_min_ratio
+                maximize='Return [%]',
+                constraint=lambda param: param.uptail_max_ratio > 0.5 and param.previous_weight > 0.0
+            )
+        except Exception as e:
+            print(f"Optimization failed: {e}")
+            print("Running single backtest with default parameters instead...")
+            return run_backtest(filepath, print_result=True)
         print("Optimization Results:")
         print(optimize_result)
         
@@ -436,6 +471,86 @@ def plot_strategy(filepath, filename='strategy_plot.html'):
     _, bt = run_backtest(filepath, print_result=False)
     bt.plot(filename=filename)
     print(f"Plot saved as {filename}")
+
+
+def generate_custom_heatmap(filepath):
+    """Generate custom heatmap by manually testing parameter combinations"""
+    print("Generating custom heatmap...")
+    
+    # Load and prepare data
+    df = load_data(filepath)
+    if df is None:
+        raise SystemExit("Failed to load data")
+    
+    # Test parameter combinations
+    atr_periods = [15, 20, 25]
+    k_atr_values = [1.8, 2.0, 2.2]
+    uptail_ratios = [0.6, 0.7, 0.8]
+    previous_weights = [0.1, 0.2, 0.3, 0.4, 0.5]
+    
+    results = []
+    
+    for atr_period in atr_periods:
+        for k_atr in k_atr_values:
+            for uptail_ratio in uptail_ratios:
+                for previous_weight in previous_weights:
+                    try:
+                        # Prepare data for this combination
+                        df_test = df.copy()
+                        df_test[f'ATR_{atr_period}'] = ta.atr(df_test['High'], df_test['Low'], df_test['Close'], length=atr_period)
+                        df_test.dropna(inplace=True)
+                        
+                        # Add week boundary info
+                        df_test['week_number'] = df_test.index.isocalendar().week
+                        df_test['year'] = df_test.index.isocalendar().year
+                        df_test['week_id'] = df_test['year'] * 100 + df_test['week_number']
+                        df_test['bar_in_week'] = df_test.groupby('week_id').cumcount()
+                        week_total_bars = df_test.groupby('week_id').size()
+                        week_total_bars_dict = week_total_bars.to_dict()
+                        df_test['is_restricted'] = False
+                        for week_id, total_bars in week_total_bars_dict.items():
+                            first_6 = df_test['week_id'] == week_id
+                            df_test.loc[first_6 & (df_test['bar_in_week'] < 6), 'is_restricted'] = True
+                            df_test.loc[first_6 & (df_test['bar_in_week'] >= (total_bars - 6)), 'is_restricted'] = True
+                        
+                        # Run backtest
+                        bt = Backtest(df_test, BigBarAllIn, cash=INITIAL_CASH, commission=COMMISSION, trade_on_close=TRADE_ON_CLOSE)
+                        stats = bt.run(atr_period=atr_period, k_atr=k_atr, uptail_max_ratio=uptail_ratio, previous_weight=previous_weight)
+                        
+                        results.append({
+                            'atr_period': atr_period,
+                            'k_atr': k_atr,
+                            'uptail_ratio': uptail_ratio,
+                            'previous_weight': previous_weight,
+                            'return_pct': stats['Return [%]'],
+                            'sharpe': stats['Sharpe Ratio'],
+                            'trades': stats['# Trades']
+                        })
+                        
+                    except Exception as e:
+                        print(f"Error with params {atr_period}, {k_atr}, {uptail_ratio}, {previous_weight}: {e}")
+                        continue
+    
+    # Convert to DataFrame for analysis
+    results_df = pd.DataFrame(results)
+    
+    # Save results
+    results_df.to_csv('heatmap_results.csv', index=False)
+    print(f"Heatmap results saved to heatmap_results.csv")
+    print(f"Tested {len(results)} parameter combinations")
+    
+    # Find best parameters
+    if not results_df.empty:
+        best = results_df.loc[results_df['return_pct'].idxmax()]
+        print(f"\nBest parameters:")
+        print(f"  atr_period: {best['atr_period']}")
+        print(f"  k_atr: {best['k_atr']}")
+        print(f"  uptail_ratio: {best['uptail_ratio']}")
+        print(f"  previous_weight: {best['previous_weight']}")
+        print(f"  Return [%]: {best['return_pct']:.2f}")
+        print(f"  Sharpe Ratio: {best['sharpe']:.2f}")
+    
+    return results_df
 
 
 def plot_heatmaps(filepath):
@@ -477,24 +592,33 @@ if __name__ == "__main__":
     
     if not args.no_optimize:
         # Run optimization with heatmap
-        optimize_result, bt, heatmap = optimize_strategy(args.filepath, return_heatmap=True)
+        result = optimize_strategy(args.filepath, return_heatmap=True)
         
-        # Plot optimized results
-        if not args.no_plot:
-            bt.plot(filename='optimized_strategy_plot.html')
-        
-        # Generate parameter heatmaps using built-in functionality
-        if not args.no_heatmaps:
-            try:
-                from backtesting.lib import plot_heatmaps
-                
-                # Create interactive heatmap using backtesting.lib.plot_heatmaps
-                plot_heatmaps(heatmap, agg='mean')
-                
-            except ImportError:
-                print("Error plotting heatmaps: backtesting.lib.plot_heatmaps is required")
-            except Exception as e:
-                print(f"Error plotting heatmaps: {e}")
+        # Check if we got backtest results (2 values) or optimization results (3 values)
+        if len(result) == 2:
+            stats, bt = result
+            print("Optimization failed, using default backtest results")
+            
+            # Plot results if requested
+            if not args.no_plot:
+                bt.plot(filename='optimized_strategy_plot.html')
+            
+            # Generate heatmaps if requested
+            if not args.no_heatmaps:
+                print("Generating custom heatmaps...")
+                generate_custom_heatmap(args.filepath)
+        else:
+            optimize_result, bt, heatmap = result
+            print("Optimization completed successfully")
+            
+            # Plot optimized results
+            if not args.no_plot:
+                bt.plot(filename='optimized_strategy_plot.html')
+            
+            # Generate parameter heatmaps using built-in functionality
+            if not args.no_heatmaps:
+                print("Generating custom heatmaps...")
+                generate_custom_heatmap(args.filepath)
     else:
         # Run backtest without optimization
         print("\n1. Running backtest without optimization...")

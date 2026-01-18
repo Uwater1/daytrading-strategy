@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-Big Bar Trading Strategy - Optimized Version
-============================================
+Big Bar Trading Strategy - Final Optimized Version
+==================================================
 High-performance implementation with pre-computed ATR values and optimized caching.
 
 Key Optimizations:
-- Pre-compute all ATR values once (eliminates tuple conversion overhead)
-- Pre-compute week boundaries as DataFrame columns (removes expensive hashing)
-- Remove unnecessary LRU caching for single-file operations
-- Direct DataFrame operations instead of cached function calls
+1. Pre-compute all ATR values once (eliminates tuple conversion overhead)
+2. Pre-compute week boundaries as DataFrame columns (removes expensive hashing)
+3. Remove unnecessary LRU caching for single-file operations
+4. Direct DataFrame operations instead of cached function calls
 
 Performance Improvements:
 - Eliminates 30,000+ element tuple creation per optimization run
@@ -25,6 +25,7 @@ import sys
 import math
 from numba import jit
 import time
+from multiprocessing import Pool, cpu_count
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -630,7 +631,6 @@ def plot_strategy_optimized(filepath, filename='optimized_strategy_plot.html'):
 
 if __name__ == "__main__":
     import argparse
-    from multiprocessing import Pool, cpu_count
     
     parser = argparse.ArgumentParser(description="Optimized Big Bar Trading Strategy")
     parser.add_argument("filepath", help="Path to CSV data file", nargs='?', default='example.csv')
