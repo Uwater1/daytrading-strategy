@@ -9,12 +9,6 @@ Key Optimizations:
 - Pre-compute week boundaries as DataFrame columns (removes expensive hashing)
 - Remove unnecessary LRU caching for single-file operations
 - Direct DataFrame operations instead of cached function calls
-
-Performance Improvements:
-- Eliminates 30,000+ element tuple creation per optimization run
-- Removes expensive index hashing for week boundaries
-- Simplifies caching strategy for better performance
-- Pre-computes expensive calculations once
 """
 
 import numpy as np
@@ -27,6 +21,36 @@ from numba import jit
 import time
 import warnings
 warnings.filterwarnings('ignore')
+
+# Check for required packages and provide helpful error messages
+def check_dependencies():
+    """Check if required packages are available and provide helpful error messages"""
+    missing_packages = []
+    
+    try:
+        import pandas_ta
+    except ImportError:
+        missing_packages.append("pandas_ta (install with: pip install pandas-ta)")
+    
+    try:
+        from backtesting import Backtest
+    except ImportError:
+        missing_packages.append("backtesting (install with: pip install backtesting)")
+    
+    try:
+        from numba import jit
+    except ImportError:
+        missing_packages.append("numba (install with: pip install numba)")
+    
+    if missing_packages:
+        print("Missing required packages:")
+        for package in missing_packages:
+            print(f"  - {package}")
+        print("\nPlease install the missing packages and try again.")
+        sys.exit(1)
+
+# Run dependency check at module import
+check_dependencies()
 
 # Performance optimizations
 pd.set_option('mode.chained_assignment', None)
@@ -59,7 +83,7 @@ def load_data(filepath):
         _data_cache[filepath] = df.copy()
         return df.copy()
     except Exception as e:
-        print(f"Error loading data from {filepath}: {e}")
+        print(f"Failed to load data from {filepath}: {e}")
         return None
 
 def precompute_atr_values(df, min_period=10, max_period=100):
@@ -128,34 +152,6 @@ def precompute_week_boundaries(df):
     
     return df
 
-@jit(nopython=True)
-def calculate_weighted_sum_numba(close_values, open_values, body):
-    """Numba-optimized calculation of weighted sum of previous 3 bars"""
-    if len(close_values) < 4 or len(open_values) < 4 or body == 0:
-        return 0.0
-    
-    bar1 = close_values[-4] - open_values[-4]
-    bar2 = close_values[-3] - open_values[-3]
-    bar3 = close_values[-2] - open_values[-2]
-    
-    weighted_sum = (1.0 * bar1) + (2.0 * bar2) + (3.0 * bar3)
-    return weighted_sum / body
-
-@jit(nopython=True)
-def check_entry_conditions_numba(open_p, high_p, low_p, close_p, size, body, atr, 
-                                k_atr, uptail_max_ratio, previous_weight, normalized_weighted_sum):
-    """Numba-optimized entry condition checker"""
-    cond_green = close_p > open_p
-    cond_size = size >= k_atr * atr
-    cond_prev3_long = normalized_weighted_sum >= previous_weight
-    cond_uptail_long = (high_p - close_p) < (uptail_max_ratio * size)
-
-    cond_red = close_p < open_p
-    cond_prev3_short = normalized_weighted_sum <= -previous_weight
-    cond_downtail_short = (close_p - low_p) < (uptail_max_ratio * size)
-
-    return (cond_green, cond_size, cond_prev3_long, cond_uptail_long,
-            cond_red, cond_prev3_short, cond_downtail_short)
 
 # Strategy parameters
 ATR_PERIOD = 20
@@ -464,28 +460,6 @@ def run_backtest_single_param_optimized(param_tuple):
         return None
 
 
-def generate_parameter_combinations():
-    """Generate all parameter combinations for optimization"""
-    atr_periods = list(range(10, 101))
-    k_atr_int_values = list(range(10, 41))
-    uptail_ratios_int_values = list(range(5, 10))
-    previous_weights_int_values = list(range(1, 9))
-    buffer_ratio_int_values = [1]
-    
-    params_list = []
-    for atr_period in atr_periods:
-        for k_atr_int in k_atr_int_values:
-            for uptail_ratio_int in uptail_ratios_int_values:
-                for previous_weight_int in previous_weights_int_values:
-                    for buffer_ratio_int in buffer_ratio_int_values:
-                        params_list.append({
-                            'atr_period': atr_period,
-                            'k_atr_int': k_atr_int,
-                            'uptail_max_ratio_int': uptail_ratio_int,
-                            'previous_weight_int': previous_weight_int,
-                            'buffer_ratio_int': buffer_ratio_int
-                        })
-    return params_list
 
 
 def parallel_optimize_strategy_optimized(filepath, workers=None):
@@ -505,7 +479,7 @@ def parallel_optimize_strategy_optimized(filepath, workers=None):
     return sambo_optimize_strategy_optimized(df, filepath, workers)
 
 
-def sambo_optimize_strategy_optimized(df, filepath, workers=None, max_tries=1000, random_state=42):
+def sambo_optimize_strategy_optimized(df, filepath, workers=None, max_tries=10, random_state=42):
     """
     SAMBO optimization with integer parameters for 1 decimal place precision.
     Uses pre-computed data for optimal performance.
@@ -583,61 +557,13 @@ def sambo_optimize_strategy_optimized(df, filepath, workers=None, max_tries=1000
         
     except Exception as e:
         print(f"Error during SAMBO optimization: {e}")
-        print("SAMBO optimization failed. Activating virtual environment and retrying...")
-        
-        # Try to activate virtual environment and retry
-        import subprocess
-        try:
-            # Activate virtual environment
-            subprocess.run(['source', '/home/hallo/Documents/daytrading-strategy/venv/bin/activate'], 
-                          shell=True, check=True, capture_output=True)
-            print("Virtual environment activated. Retrying SAMBO optimization...")
-            
-            # Retry SAMBO optimization
-            optimize_result = bt.optimize(
-                atr_period=param_ranges['atr_period'],
-                k_atr_int=param_ranges['k_atr_int'],
-                uptail_max_ratio_int=param_ranges['uptail_max_ratio_int'],
-                previous_weight_int=param_ranges['previous_weight_int'],
-                buffer_ratio_int=param_ranges['buffer_ratio_int'],
-                constraint=constraint,
-                maximize='Return [%]',
-                method='sambo',
-                max_tries=max_tries,
-                random_state=random_state
-            )
-            
-            optimization_time = time.time() - start_time
-            
-            # Extract optimized parameters
-            st = optimize_result._strategy
-            best_params = {
-                'atr_period': st.atr_period,
-                'k_atr_int': st.k_atr_int,
-                'uptail_max_ratio_int': st.uptail_max_ratio_int,
-                'previous_weight_int': st.previous_weight_int,
-                'buffer_ratio_int': st.buffer_ratio_int
-            }
-            
-            print(f"\nSAMBO Optimization completed in {optimization_time:.2f} seconds")
-            print("\nBest Optimization Results:")
-            print(optimize_result)
-            print(f"\nOptimized Parameters (Integer Values):")
-            print(f"  atr_period: {best_params['atr_period']}")
-            print(f"  k_atr_int: {best_params['k_atr_int']} (k_atr: {best_params['k_atr_int'] / 10})")
-            print(f"  uptail_max_ratio_int: {best_params['uptail_max_ratio_int']} (uptail_max_ratio: {best_params['uptail_max_ratio_int'] / 10})")
-            print(f"  previous_weight_int: {best_params['previous_weight_int']} (previous_weight: {best_params['previous_weight_int'] / 10})")
-            print(f"  buffer_ratio_int: {best_params['buffer_ratio_int']} (buffer_ratio: {best_params['buffer_ratio_int'] / 100})")
-            
-            # Create results list for compatibility
-            results = [(best_params, optimize_result)]
-            
-            return (best_params, optimize_result), results
-            
-        except Exception as retry_e:
-            print(f"Error during retry with virtual environment: {retry_e}")
-            print("SAMBO optimization failed completely. Throwing error and exiting...")
-            raise SystemExit(f"SAMBO optimization failed: {e}. Virtual environment activation and retry also failed: {retry_e}")
+        print("SAMBO optimization failed. This may be due to missing dependencies or package issues.")
+        print("Please ensure you have the required packages installed:")
+        print("  - backtesting.py with SAMBO optimization support")
+        print("  - All optimization dependencies")
+        print("SAMBO optimization requires additional packages that may not be available in your current environment.")
+        print("Consider using alternative optimization methods or installing the required dependencies.")
+        raise SystemExit(f"SAMBO optimization failed: {e}")
 
 
 def run_backtest_optimized(filepath, print_result=True, atr_period=ATR_PERIOD):
