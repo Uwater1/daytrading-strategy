@@ -17,7 +17,6 @@ import pandas_ta as ta
 from backtesting import Backtest, Strategy
 import sys
 import math
-from numba import jit
 import time
 import warnings
 import os
@@ -132,10 +131,16 @@ def print_performance_report():
     
     print("\n" + "="*60)
 
-def load_data(filepath):
+def load_data(filepath: str) -> pd.DataFrame | None:
     """
     Optimized data loading with single-copy strategy.
     Eliminates redundant DataFrame copies while maintaining thread safety.
+    
+    Args:
+        filepath: Path to CSV data file
+        
+    Returns:
+        DataFrame with loaded data or None if loading failed
     """
     if filepath in _data_cache:
         return _data_cache[filepath]
@@ -187,6 +192,65 @@ def precompute_atr_values(df, min_period=10, max_period=100):
     
     elapsed = time.time() - start_time
     print(f"ATR pre-computation completed in {elapsed:.4f} seconds")
+    return df
+
+
+def lazy_atr_computation(df, period):
+    """
+    Lazy ATR computation that only calculates when needed.
+    Optimized to use a single ATR column that gets updated for different periods.
+    
+    Args:
+        df: DataFrame with High, Low, Close columns
+        period: ATR period to compute
+    
+    Returns:
+        Series with ATR values for the specified period
+    """
+    # Use a single ATR column that gets updated for different periods
+    atr_column = 'ATR_current'
+    
+    # Check if we already have the right ATR period computed
+    if hasattr(df, '_current_atr_period') and df._current_atr_period == period:
+        return df[atr_column]
+    
+    # Compute ATR and cache it in the single column
+    print(f"Computing ATR_{period}...")
+    start_time = time.time()
+    df[atr_column] = ta.atr(df['High'], df['Low'], df['Close'], length=period)
+    df._current_atr_period = period  # Store the current period
+    
+    elapsed = time.time() - start_time
+    print(f"ATR_{period} computation completed in {elapsed:.4f} seconds")
+    
+    return df[atr_column]
+
+
+def cleanup_atr_columns(df, keep_columns=None):
+    """
+    Remove unused ATR columns to reduce memory usage.
+    Keeps only the specified columns and essential columns.
+    
+    Args:
+        df: DataFrame to clean up
+        keep_columns: List of ATR columns to keep (default: None keeps only ATR_current)
+    
+    Returns:
+        DataFrame with reduced columns
+    """
+    if keep_columns is None:
+        keep_columns = ['ATR_current']
+    
+    # Get all ATR columns
+    atr_columns = [col for col in df.columns if col.startswith('ATR_')]
+    
+    # Remove unused ATR columns
+    columns_to_drop = [col for col in atr_columns if col not in keep_columns]
+    
+    if columns_to_drop:
+        print(f"Cleaning up {len(columns_to_drop)} unused ATR columns...")
+        df = df.drop(columns=columns_to_drop)
+    
     return df
 
 
@@ -287,7 +351,7 @@ class BigBarAllIn(Strategy):
     buffer_ratio_int = 1
     
     def init(self):
-        """Initialize strategy state variables"""
+        """Initialize strategy state variables with memory-optimized caching"""
         self.trades_log = []
         self._in_trade = False
         self._entry_price = None
@@ -299,17 +363,55 @@ class BigBarAllIn(Strategy):
         self._current_stop = None
         self._position_direction = None
         
-        # Cache column references to avoid repeated string formatting
+        # Pre-calculate float parameters once to avoid division on every bar
+        self.k_atr = self.k_atr_int / 10
+        self.uptail_max_ratio = self.uptail_max_ratio_int / 10
+        self.previous_weight = self.previous_weight_int / 10
+        self.buffer_ratio = self.buffer_ratio_int / 100
+        
+        # Memory-optimized: Pre-convert to numpy arrays for maximum speed
+        self._close_array = self.data.df['Close'].values
+        self._open_array = self.data.df['Open'].values
+        self._high_array = self.data.df['High'].values
+        self._low_array = self.data.df['Low'].values
+        
+        # Cache column references
         self._atr_column = f'ATR_{self.atr_period}'
         self._is_restricted_column = 'is_restricted'
+        
+        # Pre-allocate arrays for previous bar calculations (memory-for-speed optimization)
+        self._prev_bar_cache = np.zeros(len(self.data.df))  # Cache for weighted sum calculations
+        self._prev_bar_computed = np.zeros(len(self.data.df), dtype=bool)
+        
+        # Pre-calculate previous bar weights for speed
+        self._weights = np.array([1, 2, 3])  # Weights for bars [-4, -3, -2]
+
+    def _calculate_previous_bars_optimized(self, current_index):
+        """
+        Memory-optimized calculation of previous bar metrics.
+        Uses pre-allocated numpy arrays for maximum speed.
+        """
+        # Use pre-allocated numpy arrays for maximum speed (memory-for-speed optimization)
+        if current_index < 4:
+            return 0.0
+            
+        # Direct array access - much faster than pandas indexing
+        bar1 = self._close_array[current_index - 4] - self._open_array[current_index - 4]
+        bar2 = self._close_array[current_index - 3] - self._open_array[current_index - 3]
+        bar3 = self._close_array[current_index - 2] - self._open_array[current_index - 2]
+        
+        # Apply weights directly without creating intermediate arrays
+        weighted_sum = (1 * bar1) + (2 * bar2) + (3 * bar3)
+        
+        return weighted_sum
 
     def next(self):
         """Main trading logic executed on each bar"""
-        # Convert integer parameters to float values
-        k_atr = self.k_atr_int / 10
-        uptail_max_ratio = self.uptail_max_ratio_int / 10
-        previous_weight = self.previous_weight_int / 10
-        buffer_ratio = self.buffer_ratio_int / 100
+        # Use pre-calculated float parameters (eliminates division on every bar)
+        k_atr = self.k_atr
+        uptail_max_ratio = self.uptail_max_ratio
+        previous_weight = self.previous_weight
+        buffer_ratio = self.buffer_ratio
         
         # Wait for sufficient data for ATR calculation
         if len(self.data.Close) < (self.atr_period + 5):
@@ -324,11 +426,11 @@ class BigBarAllIn(Strategy):
             self._close_position_and_log(exit_price)
             return
         
-        # Get current bar data
-        open_p = self.data.Open[-1]
-        high_p = self.data.High[-1]
-        low_p = self.data.Low[-1]
-        close_p = self.data.Close[-1]
+        # Get current bar data using numpy arrays for maximum speed
+        open_p = self._open_array[i]
+        high_p = self._high_array[i]
+        low_p = self._low_array[i]
+        close_p = self._close_array[i]
         size = high_p - low_p
         body = abs(close_p - open_p)
         atr = self.data.df[self._atr_column].iat[i]
@@ -336,12 +438,8 @@ class BigBarAllIn(Strategy):
         # Entry conditions (not in position and not restricted)
         if not self.position and not is_restricted:
             try:
-                # Calculate weighted sum of previous 3 bars (bar-4, bar-3, bar-2)
-                bar1 = (self.data.Close[-4] - self.data.Open[-4])
-                bar2 = (self.data.Close[-3] - self.data.Open[-3])
-                bar3 = (self.data.Close[-2] - self.data.Open[-2])
-                
-                weighted_sum = (1 * bar1) + (2 * bar2) + (3 * bar3)
+                # Use optimized calculation for previous bars
+                weighted_sum = self._calculate_previous_bars_optimized(i)
             except Exception:
                 return
 
@@ -576,101 +674,6 @@ def prepare_data_pipeline(filepath, min_atr_period=10, max_atr_period=100):
     return df
 
 
-def run_batch_backtests(filepath, parameter_sets, batch_size=10):
-    """
-    Run multiple backtests efficiently using batch processing.
-    Maximizes data reuse across related backtests.
-    
-    Args:
-        filepath: Path to CSV data file
-        parameter_sets: List of parameter dictionaries for backtests
-        batch_size: Number of backtests to run in each batch
-    
-    Returns:
-        List of results from all backtests
-    """
-    print(f"Running batch backtests with {len(parameter_sets)} parameter sets...")
-    start_time = time.time()
-    
-    # Prepare data once for the entire batch
-    df = prepare_data_pipeline(filepath)
-    
-    results = []
-    for i in range(0, len(parameter_sets), batch_size):
-        batch = parameter_sets[i:i+batch_size]
-        print(f"Processing batch {i//batch_size + 1}/{(len(parameter_sets)-1)//batch_size + 1}")
-        
-        # Process batch with shared data
-        batch_results = process_batch(df, batch)
-        results.extend(batch_results)
-    
-    elapsed = time.time() - start_time
-    print(f"Batch backtesting completed in {elapsed:.4f} seconds")
-    
-    return results
-
-
-def process_batch(df, parameter_sets):
-    """
-    Process a batch of parameter sets with shared data.
-    
-    Args:
-        df: Prepared DataFrame with pre-computed values
-        parameter_sets: List of parameter dictionaries
-    
-    Returns:
-        List of results from the batch
-    """
-    results = []
-    
-    for params in parameter_sets:
-        try:
-            # Create backtest with pre-computed data
-            bt = Backtest(df, BigBarAllIn, cash=INITIAL_CASH, commission=COMMISSION, trade_on_close=TRADE_ON_CLOSE)
-            
-            stats = bt.run(
-                atr_period=params.get('atr_period', ATR_PERIOD),
-                k_atr_int=params.get('k_atr_int', 20),
-                uptail_max_ratio_int=params.get('uptail_max_ratio_int', 7),
-                previous_weight_int=params.get('previous_weight_int', 1),
-                buffer_ratio_int=params.get('buffer_ratio_int', 1)
-            )
-            
-            results.append((params, stats))
-        except Exception as e:
-            print(f"Error running backtest with params {params}: {e}")
-            results.append((params, None))
-    
-    return results
-
-
-def run_backtest_single_param_optimized(param_tuple):
-    """
-    Optimized version of single parameter backtest.
-    Uses pre-computed data to eliminate redundant calculations.
-    """
-    df, params, atr_period = param_tuple
-    
-    # Create backtest with pre-computed data
-    bt = Backtest(df, BigBarAllIn, cash=INITIAL_CASH, commission=COMMISSION, trade_on_close=TRADE_ON_CLOSE)
-    
-    try:
-        stats = bt.run(
-            atr_period=atr_period,
-            k_atr_int=params['k_atr_int'],
-            uptail_max_ratio_int=params['uptail_max_ratio_int'],
-            previous_weight_int=params['previous_weight_int'],
-            buffer_ratio_int=params['buffer_ratio_int']
-        )
-        
-        # Include atr_period in the params dictionary
-        complete_params = params.copy()
-        complete_params['atr_period'] = atr_period
-        
-        return complete_params, stats
-    except Exception as e:
-        print(f"Error running backtest with params {params}: {e}")
-        return None
 
 
 
@@ -685,8 +688,8 @@ def parallel_optimize_strategy_optimized(filepath, workers=None):
     
     print(f"Starting optimized parallel optimization with {workers} workers...")
     
-    # Prepare data once with all pre-computations
-    df = prepare_data_for_optimization(filepath, 10, 100)
+    # Use the data preparation pipeline for consistent caching
+    df = prepare_data_pipeline(filepath, 10, 100)
     
     # Use SAMBO optimization instead of grid search
     return sambo_optimize_strategy_optimized(df, filepath, workers)
@@ -697,8 +700,6 @@ def sambo_optimize_strategy_optimized(df, filepath, workers=None, max_tries=10, 
     SAMBO optimization with integer parameters for 1 decimal place precision.
     Uses pre-computed data for optimal performance.
     """
-    import time
-    
     # Define parameter ranges for SAMBO (integer values)
     param_ranges = {
         'atr_period': [10, 100],           # Integer range for ATR period
