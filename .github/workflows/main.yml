@@ -44,14 +44,12 @@ jobs:
             echo "changed=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Setup Python (only if changed)
-        if: steps.check.outputs.changed == 'true'
+      - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.13'
 
-      - name: Install dependencies (only if changed and requirements.txt exists)
-        if: steps.check.outputs.changed == 'true'
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then
@@ -64,15 +62,13 @@ jobs:
             echo "requirements.txt not found; skipping pip install"
           fi
 
-      - name: Save bigbar.py with date prefix (only if changed)
-        if: steps.check.outputs.changed == 'true'
+      - name: Save bigbar.py with date prefix
         run: |
           # Copy the bigbar.py file with date prefix for version tracking
           cp bigbar.py bigbar_${DATE}.py
           echo "Saved bigbar_${DATE}.py"
 
-      - name: Run bigbar.py (only if changed)
-        if: steps.check.outputs.changed == 'true'
+      - name: Run bigbar.py
         run: |
           # Fail fast if script or data missing
           if [ ! -f bigbar.py ]; then
@@ -99,8 +95,7 @@ jobs:
           python bigbar.py "$data_file" > daytrading_strategy_${DATE}.txt
           echo "Wrote daytrading_strategy_${DATE}.txt"
 
-      - name: Write job summary (only if changed)
-        if: steps.check.outputs.changed == 'true'
+      - name: Write job summary
         run: |
           # $GITHUB_STEP_SUMMARY is a file path provided by GitHub Actions.
           # Appending a small markdown summary here makes results visible in the "Job summary" UI.
@@ -135,8 +130,7 @@ jobs:
             echo "_no text output_" >> $GITHUB_STEP_SUMMARY
           fi
 
-      - name: Print generated files to workflow logs (only if changed)
-        if: steps.check.outputs.changed == 'true'
+      - name: Print generated files to workflow logs
         run: |
           # Printing the main outputs into the workflow logs makes them available in the run logs
           # (useful if you want to avoid downloading artifacts).
@@ -155,11 +149,10 @@ jobs:
             echo "=== End $f ==="
           done
 
-      - name: Upload generated files as workflow artifact (only if changed)
-        if: steps.check.outputs.changed == 'true'
+      - name: Upload generated files as workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: daytrading-strategy-${{ env.DATE }}
+          name: daytrading-strategy-${{ env.DATE }}-$(date -u +%H:%M)
           path: |
             daytrading_strategy_${{ env.DATE }}*.txt
             *.html
@@ -169,7 +162,6 @@ jobs:
 
 
       - name: Handle duplicate files (add _new suffix if exists)
-        if: steps.check.outputs.changed == 'true'
         run: |
           # Check if daytrading_strategy_${DATE}.txt already exists and rename if needed
           if [ -f "daytrading_strategy_${DATE}.txt" ]; then
@@ -204,12 +196,18 @@ jobs:
             fi
           done
 
-      - name: Create GitHub Release and upload files (only if changed)
-        if: steps.check.outputs.changed == 'true'
+      - name: Set unique release tag
+        run: |
+          # Create a unique tag with hour:minute for multiple runs per day
+          TIMESTAMP=$(date -u +%H:%M)
+          echo "UNIQUE_TAG=daytrading-strategy-${DATE}-${TIMESTAMP}" >> $GITHUB_ENV
+          echo "UNIQUE_NAME=Daytrading Strategy ${DATE} ${TIMESTAMP}" >> $GITHUB_ENV
+
+      - name: Create GitHub Release and upload files
         uses: softprops/action-gh-release@v2
         with:
-          name: Daytrading Strategy ${{ env.DATE }}
-          tag_name: daytrading-strategy-${{ env.DATE }}
+          name: ${{ env.UNIQUE_NAME }}
+          tag_name: ${{ env.UNIQUE_TAG }}
           body: |
             Automated Daytrading Strategy analysis for ${{ env.DATE }}
             
