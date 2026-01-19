@@ -521,7 +521,7 @@ def sambo_optimize_strategy_optimized(df, filepath, max_tries=5000, random_state
         raise SystemExit(f"SAMBO optimization failed: {e}")
 
 
-def run_backtest(filepath, print_result=True, atr_period=98):
+def run_backtest(filepath, print_result=True, atr_period=98, k_atr_int=24, uptail_max_ratio_int=7, previous_weight_int=53, buffer_ratio_int=1):
     """
     Run backtest with pre-computed data.
     """
@@ -551,10 +551,10 @@ def run_backtest(filepath, print_result=True, atr_period=98):
     bt = Backtest(df, BigBarAllIn, cash=INITIAL_CASH, commission=COMMISSION, trade_on_close=TRADE_ON_CLOSE)
     stats = bt.run(
         atr_period=atr_period,
-        k_atr_int=24,
-        uptail_max_ratio_int=7,
-        previous_weight_int=53,
-        buffer_ratio_int=1
+        k_atr_int=k_atr_int,
+        uptail_max_ratio_int=uptail_max_ratio_int,
+        previous_weight_int=previous_weight_int,
+        buffer_ratio_int=buffer_ratio_int
     )
     
     # Save trades to CSV
@@ -603,18 +603,18 @@ def plot_strategy(filepath, filename='optimized_strategy_plot.html', optimized_p
         try:
             # Try to read from the optimization output or use default parameters
             optimized_params = {
-                'atr_period': 38,  # Default fallback values
-                'k_atr_int': 9,
-                'uptail_max_ratio_int': 8,
-                'previous_weight_int': 2,
+                'atr_period': 98,  # Default fallback values
+                'k_atr_int': 24,
+                'uptail_max_ratio_int': 7,
+                'previous_weight_int': 53,
                 'buffer_ratio_int': 1
             }
         except Exception:
             optimized_params = {
-                'atr_period': 20,
-                'k_atr_int': 20,
+                'atr_period': 98,
+                'k_atr_int': 24,
                 'uptail_max_ratio_int': 7,
-                'previous_weight_int': 1,
+                'previous_weight_int': 53,
                 'buffer_ratio_int': 1
             }
     
@@ -651,6 +651,11 @@ if __name__ == "__main__":
     parser.add_argument("filepath", help="Path to CSV data file", nargs='?', default='example.csv')
     parser.add_argument("--no-optimize", action="store_true", help="Skip strategy optimization")
     parser.add_argument("--no-plot", action="store_true", help="Skip strategy plotting")
+    parser.add_argument("--atr-period", type=int, default=98, help="ATR period (default: 98)")
+    parser.add_argument("--k-atr", type=float, default=2.4, help="ATR multiplier (default: 2.4)")
+    parser.add_argument("--uptail-max-ratio", type=float, default=0.7, help="Maximum up-tail ratio (default: 0.7)")
+    parser.add_argument("--previous-weight", type=float, default=0.53, help="Previous weight (default: 0.53)")
+    parser.add_argument("--buffer-ratio", type=float, default=0.01, help="Buffer ratio (default: 0.01)")
     
     args = parser.parse_args()
     
@@ -691,6 +696,22 @@ if __name__ == "__main__":
         if not args.no_plot:
             plot_strategy_with_data(df, args.filepath, 'optimized_strategy_plot.html', params)
     else:
-        run_backtest(args.filepath, print_result=True)
+        # Convert float parameters to integer equivalents for the strategy
+        k_atr_int = int(args.k_atr * 10)
+        uptail_max_ratio_int = int(args.uptail_max_ratio * 10)
+        previous_weight_int = int(args.previous_weight * 100)
+        buffer_ratio_int = int(args.buffer_ratio * 100)
+        
+        stats, bt = run_backtest(args.filepath, print_result=True, 
+                                atr_period=args.atr_period,
+                                k_atr_int=k_atr_int,
+                                uptail_max_ratio_int=uptail_max_ratio_int,
+                                previous_weight_int=previous_weight_int,
+                                buffer_ratio_int=buffer_ratio_int)
+        
+        # Plot even when not optimizing
+        if not args.no_plot:
+            bt.plot(filename='bigbar.html')
+            print(f"Plot saved as bigbar.html with parameters: atr_period={args.atr_period}, k_atr={args.k_atr}, uptail_max_ratio={args.uptail_max_ratio}, previous_weight={args.previous_weight}, buffer_ratio={args.buffer_ratio}")
         
     print("\nAll operations completed successfully!")
