@@ -521,7 +521,7 @@ def sambo_optimize_strategy_optimized(df, filepath, max_tries=5000, random_state
         raise SystemExit(f"SAMBO optimization failed: {e}")
 
 
-def run_backtest(filepath, print_result=True, atr_period=98, k_atr_int=24, uptail_max_ratio_int=7, previous_weight_int=53, buffer_ratio_int=1):
+def run_backtest(filepath, print_result=True, atr_period=98, k_atr_int=24, uptail_max_ratio_int=7, previous_weight_int=50, buffer_ratio_int=2):
     """
     Run backtest with pre-computed data.
     """
@@ -606,16 +606,16 @@ def plot_strategy(filepath, filename='optimized_strategy_plot.html', optimized_p
                 'atr_period': 98,  # Default fallback values
                 'k_atr_int': 24,
                 'uptail_max_ratio_int': 7,
-                'previous_weight_int': 53,
-                'buffer_ratio_int': 1
+                'previous_weight_int': 50,
+                'buffer_ratio_int': 2
             }
         except Exception:
             optimized_params = {
                 'atr_period': 98,
                 'k_atr_int': 24,
                 'uptail_max_ratio_int': 7,
-                'previous_weight_int': 53,
-                'buffer_ratio_int': 1
+                'previous_weight_int': 50,
+                'buffer_ratio_int': 2
             }
     
     # Load and prepare data with optimized parameters
@@ -654,8 +654,8 @@ if __name__ == "__main__":
     parser.add_argument("--atr-period", type=int, default=98, help="ATR period (default: 98)")
     parser.add_argument("--k-atr", type=float, default=2.4, help="ATR multiplier (default: 2.4)")
     parser.add_argument("--uptail-max-ratio", type=float, default=0.7, help="Maximum up-tail ratio (default: 0.7)")
-    parser.add_argument("--previous-weight", type=float, default=0.53, help="Previous weight (default: 0.53)")
-    parser.add_argument("--buffer-ratio", type=float, default=0.01, help="Buffer ratio (default: 0.01)")
+    parser.add_argument("--previous-weight", type=float, default=0.50, help="Previous weight (default: 0.50)")
+    parser.add_argument("--buffer-ratio", type=float, default=0.02, help="Buffer ratio (default: 0.02)")
     
     args = parser.parse_args()
     
