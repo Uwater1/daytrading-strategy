@@ -224,60 +224,71 @@ class BigBarAllIn(Strategy):
                 print(f"WARNING: Failed to calculate previous bars at index {i}: {e}")
                 return
 
-            normalized_weighted_sum = weighted_sum / body if body != 0 else 0
-
+            # Dynamic threshold based on previous weight
+            # If momentum matches current bar direction, it's easier (lower threshold)
+            # If momentum opposes current bar direction, it's harder (higher threshold)
+            
+            # Use user formula: (3 * closest + 2 * middle + 1 * furthest)
+            # bar_closest = i-1, bar_middle = i-2, bar_furthest = i-3
+            bar_1 = self._close_array[i-1] - self._open_array[i-1]
+            bar_2 = self._close_array[i-2] - self._open_array[i-2]
+            bar_3 = self._close_array[i-3] - self._open_array[i-3]
+            momentum = (3 * bar_1) + (2 * bar_2) + (1 * bar_3)
+            
             # Long entry conditions
             cond_green = close_p > open_p
-            cond_size = (size >= k_atr * atr) if (not math.isnan(atr) and atr > 0) else False
-            cond_prev3_long = (normalized_weighted_sum >= previous_weight)
-            cond_uptail_long = ( (high_p - close_p) < (uptail_max_ratio * size) )
+            if cond_green:
+                # If momentum is positive (aligned), threshold is reduced.
+                # If momentum is negative (opposed), threshold is increased.
+                dynamic_k = k_atr - (momentum / atr * previous_weight if atr > 0 else 0)
+                
+                cond_size = (size >= dynamic_k * atr)
+                cond_uptail_long = ( (high_p - close_p) < (uptail_max_ratio * size) )
+                
+                if cond_size and cond_uptail_long:
+                    # Calculate position size (all-in)
+                    equity = self.equity
+                    units = int(equity / close_p) if equity > 0 and close_p > 0 else 0
+                    if units >= 1:
+                        self.buy(size=units)
+                        self._in_trade = True
+                        self._entry_price = close_p
+                        self._entry_size = units
+                        self._entry_index = i
+                        self._entry_bar_high = high_p
+                        self._entry_bar_low = low_p
+                        self._bars_since_entry = 0
+                        self._position_direction = 'long'
+                        self._current_stop = low_p - (buffer_ratio * size)
+                        return
 
             # Short entry conditions
             cond_red = close_p < open_p
-            cond_prev3_short = (normalized_weighted_sum <= -previous_weight)
-            cond_downtail_short = ( (close_p - low_p) < (uptail_max_ratio * size) )
-
-            if cond_green and cond_size and cond_prev3_long and cond_uptail_long:
-                # Calculate position size (all-in)
-                equity = self.equity
-                if equity <= 0 or close_p <= 0:
-                    return
-                units = int(equity / close_p)
-                if units < 1:
-                    return
-
-                self.buy(size=units)
-                self._in_trade = True
-                self._entry_price = close_p
-                self._entry_size = units
-                self._entry_index = i
-                self._entry_bar_high = high_p
-                self._entry_bar_low = low_p
-                self._bars_since_entry = 0
-                self._position_direction = 'long'
-                self._current_stop = low_p - (buffer_ratio * size)
-                return
-
-            if cond_red and cond_size and cond_prev3_short and cond_downtail_short:
-                # Calculate position size (all-in)
-                equity = self.equity
-                if equity <= 0 or close_p <= 0:
-                    return
-                units = int(equity / close_p)
-                if units < 1:
-                    return
-
-                self.sell(size=units)
-                self._in_trade = True
-                self._entry_price = close_p
-                self._entry_size = units
-                self._entry_index = i
-                self._entry_bar_high = high_p
-                self._entry_bar_low = low_p
-                self._bars_since_entry = 0
-                self._position_direction = 'short'
-                self._current_stop = high_p + (buffer_ratio * size)
-                return
+            if cond_red:
+                # For short, negative momentum is "aligned".
+                # We want a lower threshold if momentum is negative.
+                # If momentum is -100, dynamic_k = k_atr + (-100/atr * weight) -> reduced k
+                dynamic_k = k_atr + (momentum / atr * previous_weight if atr > 0 else 0)
+                
+                cond_size = (size >= dynamic_k * atr)
+                cond_downtail_short = ( (close_p - low_p) < (uptail_max_ratio * size) )
+                
+                if cond_size and cond_downtail_short:
+                    # Calculate position size (all-in)
+                    equity = self.equity
+                    units = int(equity / close_p) if equity > 0 and close_p > 0 else 0
+                    if units >= 1:
+                        self.sell(size=units)
+                        self._in_trade = True
+                        self._entry_price = close_p
+                        self._entry_size = units
+                        self._entry_index = i
+                        self._entry_bar_high = high_p
+                        self._entry_bar_low = low_p
+                        self._bars_since_entry = 0
+                        self._position_direction = 'short'
+                        self._current_stop = high_p - (high_p - close_p) / 2  + (buffer_ratio * size)
+                        return
 
         # Position management
         if self.position:
@@ -300,7 +311,7 @@ class BigBarAllIn(Strategy):
                         return
                     else:
                         # Update stop loss
-                        potential_stop = prev_bar_low - (self.buffer_ratio * (self._entry_bar_high - self._entry_bar_low))
+                        potential_stop = prev_bar_low - (self.buffer_ratio * size)
                         if potential_stop > self._current_stop:
                             self._current_stop = potential_stop
 
@@ -334,7 +345,7 @@ class BigBarAllIn(Strategy):
                         return
                     else:
                         # Update stop loss
-                        potential_stop = prev_bar_high + (self.buffer_ratio * (self._entry_bar_high - self._entry_bar_low))
+                        potential_stop = prev_bar_high + (self.buffer_ratio * size)
                         if potential_stop < self._current_stop:
                             self._current_stop = potential_stop
 
@@ -440,10 +451,10 @@ def sambo_optimize_strategy_optimized(df, filepath, max_tries=1000, random_state
     """
     # Define parameter ranges for SAMBO (integer values)
     param_ranges = {
-        'atr_period': [10, 50],           # Integer range for ATR period
-        'k_atr_int': [1, 42],             # Integer range representing 1.0-4.0 when divided by 10
+        'atr_period': [10, 90],           # Integer range for ATR period
+        'k_atr_int': [20, 42],             # Integer range representing 1.0-4.0 when divided by 10
         'uptail_max_ratio_int': [3, 9],    # Integer range representing 0.5-0.9 when divided by 10
-        'previous_weight_int': [10, 80],     # Integer range representing 0.10-0.80 when divided by 100
+        'previous_weight_int': [10, 90],     # Integer range representing 0.10-0.80 when divided by 100
         'buffer_ratio_int': [1, 1]         # Fixed at 1 (representing 0.01 when divided by 100)
     }
     
@@ -508,12 +519,7 @@ def sambo_optimize_strategy_optimized(df, filepath, max_tries=1000, random_state
             print(f"Warning: Failed to generate heatmap visualization: {e}")
         
         # Print optimized parameters (keep this essential output)
-        print(f"Optimized Parameters:")
-        print(f"  atr_period: {best_params['atr_period']}")
-        print(f"  k_atr: {best_params['k_atr_int'] / 10}")
-        print(f"  uptail_max_ratio: {best_params['uptail_max_ratio_int'] / 10}")
-        print(f"  previous_weight: {best_params['previous_weight_int'] / 100}")
-        print(f"  buffer_ratio: {best_params['buffer_ratio_int'] / 100}")
+        # Note: This print is now removed to avoid duplication in main block
         
         # Create results list for compatibility
         results = [(best_params, optimize_result)]
@@ -580,6 +586,28 @@ def run_backtest(filepath, print_result=True, atr_period=20):
     return stats, bt
 
 
+def plot_strategy_with_data(df, filepath, filename='optimized_strategy_plot.html', optimized_params=None):
+    """Plot strategy performance chart using already-prepared data for consistency"""
+    if optimized_params is None:
+        raise ValueError("Optimized parameters must be provided for plot_strategy_with_data")
+    
+    # Use the already-prepared dataframe to ensure consistency with optimization results
+    # Remove NaN values for the specific ATR period we need
+    df_filtered = df.dropna(subset=[f'ATR_{optimized_params["atr_period"]}'])
+    if df_filtered.empty:
+        raise SystemExit(f"Not enough data after ATR({optimized_params['atr_period']}) calculation")
+
+    # Run backtest with optimized parameters using the same data as optimization
+    bt = Backtest(df_filtered, BigBarAllIn, cash=INITIAL_CASH, commission=COMMISSION, trade_on_close=TRADE_ON_CLOSE)
+    stats = bt.run(**optimized_params)
+    
+    # Plot and save
+    bt.plot(filename=filename)
+    print(f"Plot saved as {filename}")
+    print(f"Plot generated with optimized parameters: atr_period={optimized_params['atr_period']}, k_atr={optimized_params['k_atr_int'] / 10}, uptail_max_ratio={optimized_params['uptail_max_ratio_int'] / 10}, previous_weight={optimized_params['previous_weight_int'] / 100}, buffer_ratio={optimized_params['buffer_ratio_int'] / 100}")
+    print(f"Plot statistics match optimization results: Return [%] = {stats['Return [%]']:.3f}")
+
+
 def plot_strategy(filepath, filename='optimized_strategy_plot.html', optimized_params=None):
     """Plot strategy performance chart"""
     if optimized_params is None:
@@ -625,7 +653,7 @@ def plot_strategy(filepath, filename='optimized_strategy_plot.html', optimized_p
     # Plot and save
     bt.plot(filename=filename)
     print(f"Plot saved as {filename}")
-    print(f"Plot generated with optimized parameters: {optimized_params}")
+    print(f"Plot generated with optimized parameters: atr_period={optimized_params['atr_period']}, k_atr={optimized_params['k_atr_int'] / 10}, uptail_max_ratio={optimized_params['uptail_max_ratio_int'] / 10}, previous_weight={optimized_params['previous_weight_int'] / 100}, buffer_ratio={optimized_params['buffer_ratio_int'] / 100}")
 
 
 if __name__ == "__main__":
@@ -663,7 +691,7 @@ if __name__ == "__main__":
         
         if best_result:
             params, optimize_result = best_result
-            print(f"\nOptimized Parameters:")
+            print(f"Optimized Parameters:")
             print(f"  atr_period: {params['atr_period']}")
             print(f"  k_atr: {params['k_atr_int'] / 10}")
             print(f"  uptail_max_ratio: {params['uptail_max_ratio_int'] / 10}")
@@ -674,7 +702,7 @@ if __name__ == "__main__":
             print(optimize_result)
         
         if not args.no_plot:
-            plot_strategy(args.filepath, 'optimized_strategy_plot.html', params)
+            plot_strategy_with_data(df, args.filepath, 'optimized_strategy_plot.html', params)
     else:
         run_backtest(args.filepath, print_result=True)
         
