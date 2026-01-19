@@ -394,7 +394,7 @@ class BigBarAllIn(Strategy):
         self._position_direction = None
 
 
-def prepare_data_pipeline(filepath, min_atr_period=10, max_atr_period=100):
+def prepare_data_pipeline(filepath, min_atr_period=20, max_atr_period=100):
     """
     Create a reusable data preparation pipeline.
     Eliminates redundant ATR calculations across multiple backtests.
@@ -434,14 +434,14 @@ def prepare_data_pipeline(filepath, min_atr_period=10, max_atr_period=100):
     _prepared_cache[cache_key] = df
     return df
 
-def sambo_optimize_strategy_optimized(df, filepath, max_tries=1000, random_state=1):
+def sambo_optimize_strategy_optimized(df, filepath, max_tries=5000, random_state=1):
     """
     SAMBO optimization with integer parameters for 1 decimal place precision.
     Uses pre-computed data for optimal performance and built-in heatmap support.
     """
     # Define parameter ranges for SAMBO (integer values)
     param_ranges = {
-        'atr_period': [10, 110],           # Integer range for ATR period
+        'atr_period': [20, 100],           # Integer range for ATR period (matches precomputed range)
         'k_atr_int': [20, 42],             # Integer range representing 1.0-4.0 when divided by 10
         'uptail_max_ratio_int': [3, 9],    # Integer range representing 0.5-0.9 when divided by 10
         'previous_weight_int': [10, 60],     # Integer range representing 0.10-0.80 when divided by 100
@@ -521,7 +521,7 @@ def sambo_optimize_strategy_optimized(df, filepath, max_tries=1000, random_state
         raise SystemExit(f"SAMBO optimization failed: {e}")
 
 
-def run_backtest(filepath, print_result=True, atr_period=90):
+def run_backtest(filepath, print_result=True, atr_period=98):
     """
     Run backtest with pre-computed data.
     """
@@ -551,10 +551,10 @@ def run_backtest(filepath, print_result=True, atr_period=90):
     bt = Backtest(df, BigBarAllIn, cash=INITIAL_CASH, commission=COMMISSION, trade_on_close=TRADE_ON_CLOSE)
     stats = bt.run(
         atr_period=atr_period,
-        k_atr_int=21,
+        k_atr_int=24,
         uptail_max_ratio_int=7,
-        previous_weight_int=35,
-        buffer_ratio_int=2
+        previous_weight_int=53,
+        buffer_ratio_int=1
     )
     
     # Save trades to CSV
@@ -593,9 +593,7 @@ def plot_strategy_with_data(df, filepath, filename='optimized_strategy_plot.html
     
     # Plot and save
     bt.plot(filename=filename)
-    print(f"Plot saved as {filename}")
-    print(f"Plot generated with optimized parameters: atr_period={optimized_params['atr_period']}, k_atr={optimized_params['k_atr_int'] / 10}, uptail_max_ratio={optimized_params['uptail_max_ratio_int'] / 10}, previous_weight={optimized_params['previous_weight_int'] / 100}, buffer_ratio={optimized_params['buffer_ratio_int'] / 100}")
-    print(f"Plot statistics match optimization results: Return [%] = {stats['Return [%]']:.3f}")
+    print(f"Plot {filename} with: atr_period={optimized_params['atr_period']}, k_atr={optimized_params['k_atr_int'] / 10}, uptail_max_ratio={optimized_params['uptail_max_ratio_int'] / 10}, previous_weight={optimized_params['previous_weight_int'] / 100}, buffer_ratio={optimized_params['buffer_ratio_int'] / 100}")
 
 
 def plot_strategy(filepath, filename='optimized_strategy_plot.html', optimized_params=None):
@@ -642,8 +640,7 @@ def plot_strategy(filepath, filename='optimized_strategy_plot.html', optimized_p
     
     # Plot and save
     bt.plot(filename=filename)
-    print(f"Plot saved as {filename}")
-    print(f"Plot generated with optimized parameters: atr_period={optimized_params['atr_period']}, k_atr={optimized_params['k_atr_int'] / 10}, uptail_max_ratio={optimized_params['uptail_max_ratio_int'] / 10}, previous_weight={optimized_params['previous_weight_int'] / 100}, buffer_ratio={optimized_params['buffer_ratio_int'] / 100}")
+    print(f"Plot saved as {filename}, with parameters: atr_period={optimized_params['atr_period']}, k_atr={optimized_params['k_atr_int'] / 10}, uptail_max_ratio={optimized_params['uptail_max_ratio_int'] / 10}, previous_weight={optimized_params['previous_weight_int'] / 100}, buffer_ratio={optimized_params['buffer_ratio_int'] / 100}")
 
 
 if __name__ == "__main__":
