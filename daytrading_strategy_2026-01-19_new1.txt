@@ -1,0 +1,52 @@
+Optimized Parameters:
+  atr_period: 31
+  k_atr: 4.2
+  uptail_max_ratio: 0.6
+  previous_weight: 0.1
+  buffer_ratio: 0.01
+
+Optimized Parameters:
+  atr_period: 31
+  k_atr: 4.2
+  uptail_max_ratio: 0.6
+  previous_weight: 0.1
+  buffer_ratio: 0.01
+Start                     2025-09-08 06:15...
+End                       2025-09-15 07:50...
+Duration                      7 days 01:35:00
+Exposure Time [%]                       0.429
+Equity Final [$]                   100268.380
+Equity Peak [$]                    100313.875
+Return [%]                              0.268
+Buy & Hold Return [%]                   1.465
+Return (Ann.) [%]                      10.130
+Volatility (Ann.) [%]                   2.069
+CAGR [%]                               10.030
+Sharpe Ratio                            4.897
+Sortino Ratio                          89.316
+Calmar Ratio                          115.267
+Alpha [%]                               0.317
+Beta                                   -0.033
+Max. Drawdown [%]                      -0.088
+Avg. Drawdown [%]                      -0.088
+Max. Drawdown Duration        5 days 17:45:00
+Avg. Drawdown Duration        5 days 17:45:00
+# Trades                                    2
+Win Rate [%]                           50.000
+Best Trade [%]                          0.289
+Worst Trade [%]                        -0.018
+Avg. Trade [%]                          0.136
+Max. Trade Duration           0 days 00:15:00
+Avg. Trade Duration           0 days 00:10:00
+Profit Factor                          16.198
+Expectancy [%]                          0.136
+SQN                                     0.884
+Kelly Criterion                         0.469
+_strategy                 BigBarAllIn(atr_...
+_equity_curve                             ...
+_trades                      Size  EntryBa...
+dtype: object
+Plot saved as optimized_strategy_plot.html
+Plot generated with optimized parameters: {'atr_period': 31, 'k_atr_int': 42, 'uptail_max_ratio_int': 6, 'previous_weight_int': 10, 'buffer_ratio_int': 1}
+
+All operations completed successfully!
