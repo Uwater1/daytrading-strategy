@@ -152,7 +152,7 @@ jobs:
       - name: Upload generated files as workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: daytrading-strategy-${{ env.DATE }}-$(date -u +%H:%M)
+          name: daytrading-strategy-${{ env.DATE }}-$(date -u +%H-%M)
           path: |
             daytrading_strategy_${{ env.DATE }}*.txt
             *.html
@@ -198,8 +198,8 @@ jobs:
 
       - name: Set unique release tag
         run: |
-          # Create a unique tag with hour:minute for multiple runs per day
-          TIMESTAMP=$(date -u +%H:%M)
+          # Create a unique tag with hour-minute for multiple runs per day
+          TIMESTAMP=$(date -u +%H-%M)
           echo "UNIQUE_TAG=daytrading-strategy-${DATE}-${TIMESTAMP}" >> $GITHUB_ENV
           echo "UNIQUE_NAME=Daytrading Strategy ${DATE} ${TIMESTAMP}" >> $GITHUB_ENV
 
