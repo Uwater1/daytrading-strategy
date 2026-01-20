@@ -1,0 +1,46 @@
+Optimized Parameters:
+  atr_period: 45
+  k_atr: 3.5
+  uptail_max_ratio: 0.6
+  previous_weight: 0.27
+  buffer_ratio: 0.01
+  tp_ratio: 4.5
+Start                     2025-06-30 06:15...
+End                       2025-10-09 19:25...
+Duration                    101 days 13:10:00
+Exposure Time [%]                       2.254
+Equity Final [$]                   101821.107
+Equity Peak [$]                    102892.600
+Commissions [$]                      2727.266
+Return [%]                              1.821
+Buy & Hold Return [%]                  20.921
+Return (Ann.) [%]                       5.304
+Volatility (Ann.) [%]                   3.406
+CAGR [%]                                4.580
+Sharpe Ratio                            1.557
+Sortino Ratio                           3.007
+Calmar Ratio                            3.904
+Alpha [%]                               2.216
+Beta                                   -0.019
+Max. Drawdown [%]                      -1.359
+Avg. Drawdown [%]                      -0.359
+Max. Drawdown Duration       21 days 18:55:00
+Avg. Drawdown Duration        5 days 02:30:00
+# Trades                                  137
+Win Rate [%]                           33.577
+Best Trade [%]                          0.512
+Worst Trade [%]                        -0.277
+Avg. Trade [%]                          0.013
+Max. Trade Duration           0 days 00:40:00
+Avg. Trade Duration           0 days 00:13:00
+Profit Factor                           1.221
+Expectancy [%]                          0.013
+SQN                                     0.849
+Kelly Criterion                         0.060
+_strategy                 BigBarAllIn(atr_...
+_equity_curve                             ...
+_trades                        Size  Entry...
+dtype: object
+Plot optimized_strategy_plot.html with: atr_period=45, k_atr=3.5, uptail_max_ratio=0.6, previous_weight=0.27, buffer_ratio=0.01, tp_ratio=4.5
+
+All operations completed successfully!
