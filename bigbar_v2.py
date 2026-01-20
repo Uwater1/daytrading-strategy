@@ -126,7 +126,7 @@ class BigBarAllIn(Strategy):
     uptail_max_ratio_int = 7
     previous_weight_int = 1
     buffer_ratio_int = 1
-    tp_ratio_int = 45  # Int representing tp_ratio * 10 (e.g., 30 = 3.0x ATR)
+    tp_ratio_int = 30  # Int representing tp_ratio * 10 (e.g., 30 = 3.0x ATR)
     
     def init(self):
         """Initialize strategy state variables with memory-optimized caching"""
@@ -498,7 +498,7 @@ def sambo_optimize_strategy_optimized(df, filepath, max_tries=5000, random_state
         raise SystemExit(f"SAMBO optimization failed: {e}")
 
 
-def run_backtest(filepath, print_result=True, atr_period=36, k_atr_int=29, uptail_max_ratio_int=6, previous_weight_int=21, buffer_ratio_int=2, tp_ratio_int=45):
+def run_backtest(filepath, print_result=True, atr_period=36, k_atr_int=29, uptail_max_ratio_int=6, previous_weight_int=21, buffer_ratio_int=2, tp_ratio_int=30):
     """
     Run backtest with pre-computed data.
     """
@@ -571,7 +571,7 @@ def plot_strategy_with_data(df, filepath, filename='optimized_strategy_plot.html
     
     # Plot and save
     bt.plot(filename=filename)
-    print(f"Plot {filename} with: atr_period={optimized_params['atr_period']}, k_atr={optimized_params['k_atr_int'] / 10}, uptail_max_ratio={optimized_params['uptail_max_ratio_int'] / 10}, previous_weight={optimized_params['previous_weight_int'] / 100}, buffer_ratio={optimized_params['buffer_ratio_int'] / 100}, tp_ratio={optimized_params.get('tp_ratio_int',45) / 10}")
+    print(f"Plot {filename} with: atr_period={optimized_params['atr_period']}, k_atr={optimized_params['k_atr_int'] / 10}, uptail_max_ratio={optimized_params['uptail_max_ratio_int'] / 10}, previous_weight={optimized_params['previous_weight_int'] / 100}, buffer_ratio={optimized_params['buffer_ratio_int'] / 100}, tp_ratio={optimized_params.get('tp_ratio_int', 30) / 10}")
 
 
 def plot_strategy(filepath, filename='optimized_strategy_plot.html', optimized_params=None):
@@ -618,7 +618,7 @@ def plot_strategy(filepath, filename='optimized_strategy_plot.html', optimized_p
     
     # Plot and save
     bt.plot(filename=filename)
-    print(f"Plot saved as {filename}, with parameters: atr_period={optimized_params['atr_period']}, k_atr={optimized_params['k_atr_int'] / 10}, uptail_max_ratio={optimized_params['uptail_max_ratio_int'] / 10}, previous_weight={optimized_params['previous_weight_int'] / 100}, buffer_ratio={optimized_params['buffer_ratio_int'] / 100}, tp_ratio={optimized_params.get('tp_ratio_int', 45) / 10}")
+    print(f"Plot saved as {filename}, with parameters: atr_period={optimized_params['atr_period']}, k_atr={optimized_params['k_atr_int'] / 10}, uptail_max_ratio={optimized_params['uptail_max_ratio_int'] / 10}, previous_weight={optimized_params['previous_weight_int'] / 100}, buffer_ratio={optimized_params['buffer_ratio_int'] / 100}, tp_ratio={optimized_params.get('tp_ratio_int', 30) / 10}")
 
 
 if __name__ == "__main__":
@@ -634,7 +634,7 @@ if __name__ == "__main__":
     parser.add_argument("--uptail-max-ratio", type=float, default=0.7, help="Maximum up-tail ratio (default: 0.7)")
     parser.add_argument("--previous-weight", type=float, default=0.50, help="Previous weight (default: 0.50)")
     parser.add_argument("--buffer-ratio", type=float, default=0.02, help="Buffer ratio (default: 0.02)")
-    parser.add_argument("--tp-ratio", type=float, default=4.5, help="TP ATR multiplier (default: 3.0)")
+    parser.add_argument("--tp-ratio", type=float, default=3.0, help="TP ATR multiplier (default: 3.0)")
     
     args = parser.parse_args()
     
@@ -668,7 +668,7 @@ if __name__ == "__main__":
             print(f"  uptail_max_ratio: {params['uptail_max_ratio_int'] / 10}")
             print(f"  previous_weight: {params['previous_weight_int'] / 100}")
             print(f"  buffer_ratio: {params['buffer_ratio_int'] / 100}")
-            print(f"  tp_ratio: {params.get('tp_ratio_int', 45) / 10}")
+            print(f"  tp_ratio: {params.get('tp_ratio_int', 30) / 10}")
             
             # Print the statistics (restored as requested)
             print(optimize_result)
