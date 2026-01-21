@@ -126,6 +126,8 @@ class BigBarAllIn(Strategy):
     k_atr_int = 41
     uptail_max_ratio_int = 6
     previous_weight_int = 41
+    buffer_ratio_int = 1
+    tp_ratio_int = 43  # Int representing tp_ratio * 10 (e.g., 30 = 3.0x ATR)
     n_bar_breakout = 16  # Number of previous bars to consider for breakout detection
     
     def init(self):
@@ -136,17 +138,15 @@ class BigBarAllIn(Strategy):
         self._entry_index = None
         self._entry_bar_high = None
         self._entry_bar_low = None
+        self._bars_since_entry = 0
         self._position_direction = None
-        
-        # Adaptive TP/SL state variables
-        self._initial_tp_target = None
-        self._tp_extended = True
-        self._base_sl_price = None
         
         # Pre-calculate float parameters once to avoid division on every bar
         self.k_atr = self.k_atr_int / 10
         self.uptail_max_ratio = self.uptail_max_ratio_int / 10
         self.previous_weight = self.previous_weight_int / 100
+        self.buffer_ratio = self.buffer_ratio_int / 100
+        self.tp_ratio = self.tp_ratio_int / 10
         
         # Memory-optimized: Pre-convert to numpy arrays for maximum speed
         self._close_array = self.data.df['Close'].values
@@ -208,6 +208,7 @@ class BigBarAllIn(Strategy):
         k_atr = self.k_atr
         uptail_max_ratio = self.uptail_max_ratio
         previous_weight = self.previous_weight
+        buffer_ratio = self.buffer_ratio
         
         # Wait for sufficient data for ATR calculation
         if len(self.data.Close) < (self.atr_period + 5):
@@ -269,31 +270,16 @@ class BigBarAllIn(Strategy):
                             equity = self.equity
                             units = int(equity / close_p) if equity > 0 and close_p > 0 else 0
                             if units >= 1:
-                                # Adaptive TP/SL Setup for Long
-                                # 1. Calculate pre-entry run height (consecutive green bars)
-                                run_height = 0
-                                j = i
-                                while j >= 0 and self._close_array[j] > self._open_array[j]:
-                                    run_height = max(run_height, self._high_array[j] - self._low_array[j]) # Or is it Max(high) - Min(low)? 
-                                    # User says "2 x the size (high-low) of this first consecutive same-direction bar series"
-                                    # Wait, "first consecutive same-direction bar series" implies the whole series.
-                                    # "Set initial take-profit at 2 x the size (high-low) of this first consecutive same-direction bar series."
-                                    # Let's find the start of the consecutive run.
-                                    j -= 1
-                                run_start_idx = j + 1
-                                series_height = np.max(self._high_array[run_start_idx:i+1]) - np.min(self._low_array[run_start_idx:i+1])
-                                
-                                self._initial_tp_target = close_p + 2 * series_height
-                                self._base_sl_price = low_p
-                                self._tp_extended = True
-                                
-                                self.buy(size=units, sl=self._base_sl_price, tp=self._initial_tp_target)
+                                stop_level = low_p + (close_p - low_p) / 2 - (buffer_ratio * size)
+                                tp_level = close_p + (atr * self.tp_ratio) if atr > 0 else None
+                                self.buy(size=units, sl=stop_level, tp=tp_level)
                                 self._in_trade = True
                                 self._entry_price = close_p
                                 self._entry_size = units
                                 self._entry_index = i
                                 self._entry_bar_high = high_p
                                 self._entry_bar_low = low_p
+                                self._bars_since_entry = 0
                                 self._position_direction = 'long'
                                 return
 
@@ -316,31 +302,23 @@ class BigBarAllIn(Strategy):
                             equity = self.equity
                             units = int(equity / close_p) if equity > 0 and close_p > 0 else 0
                             if units >= 1:
-                                # Adaptive TP/SL Setup for Short
-                                # 1. Calculate pre-entry run height (consecutive red bars)
-                                run_height = 0
-                                j = i
-                                while j >= 0 and self._close_array[j] < self._open_array[j]:
-                                    j -= 1
-                                run_start_idx = j + 1
-                                series_height = np.max(self._high_array[run_start_idx:i+1]) - np.min(self._low_array[run_start_idx:i+1])
-                                
-                                self._initial_tp_target = close_p - 2 * series_height
-                                self._base_sl_price = high_p
-                                self._tp_extended = True
-                                
-                                self.sell(size=units, sl=self._base_sl_price, tp=self._initial_tp_target)
+                                stop_level = high_p - (high_p - close_p) / 2  + (buffer_ratio * size)
+                                tp_level = close_p - (atr * self.tp_ratio) if atr > 0 else None
+                                self.sell(size=units, sl=stop_level, tp=tp_level)
                                 self._in_trade = True
                                 self._entry_price = close_p
                                 self._entry_size = units
                                 self._entry_index = i
                                 self._entry_bar_high = high_p
                                 self._entry_bar_low = low_p
+                                self._bars_since_entry = 0
                                 self._position_direction = 'short'
                                 return
 
         # Position management
         if self.position:
+            self._bars_since_entry += 1
+
             # Use numpy arrays for maximum speed
             prev_bar_high = self._high_array[i]
             prev_bar_low = self._low_array[i]
@@ -348,44 +326,52 @@ class BigBarAllIn(Strategy):
             prev_bar_open = self._open_array[i]
 
             if self._position_direction == 'long':
-                # Measured Move Take-Profit Extension
-                if self._tp_extended:
-                    if close_p > open_p:
-                        # Continue extending TP by the bar size (high-low)
-                        self._initial_tp_target += (high_p - low_p)
-                        for trade in self.trades:
-                            trade.tp = self._initial_tp_target
+                # Exit on first bar after entry if conditions met
+                if self._bars_since_entry == 1:
+                    # Relaxed exit: Only if it closes below the entry bar's OPEN (significant reversal)
+                    is_failed = prev_bar_close < self._open_array[self._entry_index]
+                    if is_failed:
+                        self._close_position_and_log(prev_bar_close)
+                        return
                     else:
-                        # First opposite-direction bar, stop extending
-                        self._tp_extended = False
+                        # Update stop loss
+                        potential_stop = prev_bar_low - (self.buffer_ratio * (self._entry_bar_high - self._entry_bar_low))
+                        for trade in self.trades:
+                            if potential_stop > (trade.sl or -np.inf):
+                                trade.sl = potential_stop
 
-                # Half-Reversal Trailing Stop (Always Follow)
-                # new_sl = base_low + (current_low - base_low) / 2
-                new_sl = self._base_sl_price + (low_p - self._base_sl_price) / 2
-                for trade in self.trades:
-                    # Never weaken the stop
-                    if new_sl > (trade.sl or -np.inf):
-                        trade.sl = new_sl
+                # Trailing stop after first bar
+                if self._bars_since_entry >= 2:
+                    # Update stop for the NEXT bar
+                    entry_bar_size = self._entry_bar_high - self._entry_bar_low
+                    new_stop = self._low_array[i] - (self.buffer_ratio * entry_bar_size)
+                    for trade in self.trades:
+                        if new_stop > (trade.sl or -np.inf):
+                            trade.sl = new_stop
 
             elif self._position_direction == 'short':
-                # Measured Move Take-Profit Extension
-                if self._tp_extended:
-                    if close_p < open_p:
-                        # Continue extending TP by the bar size (high-low)
-                        self._initial_tp_target -= (high_p - low_p)
-                        for trade in self.trades:
-                            trade.tp = self._initial_tp_target
+                # Exit on first bar after entry if conditions met
+                if self._bars_since_entry == 1:
+                    # Relaxed exit: Only if it closes above the entry bar's OPEN (significant reversal)
+                    is_failed = prev_bar_close > self._open_array[self._entry_index]
+                    if is_failed:
+                        self._close_position_and_log(prev_bar_close)
+                        return
                     else:
-                        # First opposite-direction bar, stop extending
-                        self._tp_extended = False
+                        # Update stop loss
+                        potential_stop = prev_bar_high + (self.buffer_ratio * (self._entry_bar_high - self._entry_bar_low))
+                        for trade in self.trades:
+                            if potential_stop < (trade.sl or np.inf):
+                                trade.sl = potential_stop
 
-                # Half-Reversal Trailing Stop (Always Follow)
-                # new_sl = base_high - (base_high - current_high) / 2
-                new_sl = self._base_sl_price - (self._base_sl_price - high_p) / 2
-                for trade in self.trades:
-                    # Never weaken the stop
-                    if new_sl < (trade.sl or np.inf):
-                        trade.sl = new_sl
+                # Trailing stop after first bar
+                if self._bars_since_entry >= 2:
+                    # Update stop for the NEXT bar
+                    entry_bar_size = self._entry_bar_high - self._entry_bar_low
+                    new_stop = self._high_array[i] + (self.buffer_ratio * entry_bar_size)
+                    for trade in self.trades:
+                        if new_stop < (trade.sl or np.inf):
+                            trade.sl = new_stop
 
     def _close_position_and_log(self, exit_price):
         """Close current position"""
@@ -400,6 +386,7 @@ class BigBarAllIn(Strategy):
         self._entry_index = None
         self._entry_bar_high = None
         self._entry_bar_low = None
+        self._bars_since_entry = 0
         self._position_direction = None
 
 
@@ -454,6 +441,8 @@ def sambo_optimize_strategy_optimized(df, filepath, max_tries=5000, random_state
         'k_atr_int': [20, 42],             # Integer range representing 1.0-4.0 when divided by 10
         'uptail_max_ratio_int': [1, 6],    # Integer range representing 0.5-0.9 when divided by 10
         'previous_weight_int': [10, 60],     # Integer range representing 0.10-0.80 when divided by 100
+        'buffer_ratio_int': [1, 2],         # Fixed at 1 (representing 0.01 when divided by 100)
+        'tp_ratio_int': [10, 50],           # Range 1.0x to 5.0x ATR
         'n_bar_breakout': [2, 20]           # Range for breakout filter (2 to 20 bars)
     }
     
@@ -474,6 +463,8 @@ def sambo_optimize_strategy_optimized(df, filepath, max_tries=5000, random_state
             k_atr_int=param_ranges['k_atr_int'],
             uptail_max_ratio_int=param_ranges['uptail_max_ratio_int'],
             previous_weight_int=param_ranges['previous_weight_int'],
+            buffer_ratio_int=param_ranges['buffer_ratio_int'],
+            tp_ratio_int=param_ranges['tp_ratio_int'],
             n_bar_breakout=param_ranges['n_bar_breakout'],
             constraint=constraint,
             maximize='Return [%]',
@@ -493,6 +484,8 @@ def sambo_optimize_strategy_optimized(df, filepath, max_tries=5000, random_state
             'k_atr_int': st.k_atr_int,
             'uptail_max_ratio_int': st.uptail_max_ratio_int,
             'previous_weight_int': st.previous_weight_int,
+            'buffer_ratio_int': st.buffer_ratio_int,
+            'tp_ratio_int': st.tp_ratio_int,
             'n_bar_breakout': st.n_bar_breakout
         }
         
@@ -503,7 +496,9 @@ def sambo_optimize_strategy_optimized(df, filepath, max_tries=5000, random_state
                 'k_atr_int': [idx[1] for idx in heatmap.index],
                 'uptail_max_ratio_int': [idx[2] for idx in heatmap.index],
                 'previous_weight_int': [idx[3] for idx in heatmap.index],
-                'n_bar_breakout': [idx[4] for idx in heatmap.index],
+                'buffer_ratio_int': [idx[4] for idx in heatmap.index],
+                'tp_ratio_int': [idx[5] for idx in heatmap.index],
+                'n_bar_breakout': [idx[6] for idx in heatmap.index],
                 'return_pct': heatmap.values
             })
             heatmap_df.to_csv('sambo_heatmap_results.csv', index=False)
@@ -530,7 +525,7 @@ def sambo_optimize_strategy_optimized(df, filepath, max_tries=5000, random_state
         raise SystemExit(f"SAMBO optimization failed: {e}")
 
 
-def run_backtest(filepath, print_result=True, atr_period=36, k_atr_int=29, uptail_max_ratio_int=6, previous_weight_int=21, n_bar_breakout=15):
+def run_backtest(filepath, print_result=True, atr_period=36, k_atr_int=29, uptail_max_ratio_int=6, previous_weight_int=21, buffer_ratio_int=2, tp_ratio_int=45, n_bar_breakout=15):
     """
     Run backtest with pre-computed data.
     """
@@ -563,6 +558,8 @@ def run_backtest(filepath, print_result=True, atr_period=36, k_atr_int=29, uptai
         k_atr_int=k_atr_int,
         uptail_max_ratio_int=uptail_max_ratio_int,
         previous_weight_int=previous_weight_int,
+        buffer_ratio_int=buffer_ratio_int,
+        tp_ratio_int=tp_ratio_int,
         n_bar_breakout=n_bar_breakout
     )
     
@@ -602,7 +599,7 @@ def plot_strategy_with_data(df, filepath, filename='optimized_strategy_plot.html
     
     # Plot and save
     bt.plot(filename=filename)
-    print(f"Plot {filename} with: atr_period={optimized_params['atr_period']}, k_atr={optimized_params['k_atr_int'] / 10}, uptail_max_ratio={optimized_params['uptail_max_ratio_int'] / 10}, previous_weight={optimized_params['previous_weight_int'] / 100}")
+    print(f"Plot {filename} with: atr_period={optimized_params['atr_period']}, k_atr={optimized_params['k_atr_int'] / 10}, uptail_max_ratio={optimized_params['uptail_max_ratio_int'] / 10}, previous_weight={optimized_params['previous_weight_int'] / 100}, buffer_ratio={optimized_params['buffer_ratio_int'] / 100}, tp_ratio={optimized_params.get('tp_ratio_int',45) / 10}")
 
 
 def plot_strategy(filepath, filename='optimized_strategy_plot.html', optimized_params=None):
@@ -616,7 +613,7 @@ def plot_strategy(filepath, filename='optimized_strategy_plot.html', optimized_p
                 'k_atr_int': 29,
                 'uptail_max_ratio_int': 6,
                 'previous_weight_int': 21,
-                'n_bar_breakout': 15
+                'buffer_ratio_int': 2
             }
         except Exception:
             optimized_params = {
@@ -624,7 +621,7 @@ def plot_strategy(filepath, filename='optimized_strategy_plot.html', optimized_p
                 'k_atr_int': 29,
                 'uptail_max_ratio_int': 6,
                 'previous_weight_int': 21,
-                'n_bar_breakout': 15
+                'buffer_ratio_int': 2
             }
     
     # Load and prepare data with optimized parameters
@@ -649,7 +646,7 @@ def plot_strategy(filepath, filename='optimized_strategy_plot.html', optimized_p
     
     # Plot and save
     bt.plot(filename=filename)
-    print(f"Plot saved as {filename}, with parameters: atr_period={optimized_params['atr_period']}, k_atr={optimized_params['k_atr_int'] / 10}, uptail_max_ratio={optimized_params['uptail_max_ratio_int'] / 10}, previous_weight={optimized_params['previous_weight_int'] / 100}")
+    print(f"Plot saved as {filename}, with parameters: atr_period={optimized_params['atr_period']}, k_atr={optimized_params['k_atr_int'] / 10}, uptail_max_ratio={optimized_params['uptail_max_ratio_int'] / 10}, previous_weight={optimized_params['previous_weight_int'] / 100}, buffer_ratio={optimized_params['buffer_ratio_int'] / 100}, tp_ratio={optimized_params.get('tp_ratio_int', 45) / 10}")
 
 
 if __name__ == "__main__":
@@ -664,6 +661,8 @@ if __name__ == "__main__":
     parser.add_argument("--k-atr", type=float, default=2.4, help="ATR multiplier (default: 2.4)")
     parser.add_argument("--uptail-max-ratio", type=float, default=0.7, help="Maximum up-tail ratio (default: 0.7)")
     parser.add_argument("--previous-weight", type=float, default=0.50, help="Previous weight (default: 0.50)")
+    parser.add_argument("--buffer-ratio", type=float, default=0.02, help="Buffer ratio (default: 0.02)")
+    parser.add_argument("--tp-ratio", type=float, default=4.5, help="TP ATR multiplier (default: 3.0)")
     parser.add_argument("--n-bar-breakout", type=int, default=5, help="Number of bars for breakout detection (default: 5)")
     parser.add_argument("--spread", type=float, default=0.0001, help="Bid-ask spread rate (default: 0.0001)")
     
@@ -701,6 +700,8 @@ if __name__ == "__main__":
             print(f"  k_atr: {params['k_atr_int'] / 10}")
             print(f"  uptail_max_ratio: {params['uptail_max_ratio_int'] / 10}")
             print(f"  previous_weight: {params['previous_weight_int'] / 100}")
+            print(f"  buffer_ratio: {params['buffer_ratio_int'] / 100}")
+            print(f"  tp_ratio: {params.get('tp_ratio_int', 45) / 10}")
             print(f"  n_bar_breakout: {params['n_bar_breakout']}")
             
             # Print the statistics (restored as requested)
@@ -713,17 +714,20 @@ if __name__ == "__main__":
         k_atr_int = int(args.k_atr * 10)
         uptail_max_ratio_int = int(args.uptail_max_ratio * 10)
         previous_weight_int = int(args.previous_weight * 100)
+        buffer_ratio_int = int(args.buffer_ratio * 100)
         
         stats, bt = run_backtest(args.filepath, print_result=True, 
                                 atr_period=args.atr_period,
                                 k_atr_int=k_atr_int,
                                 uptail_max_ratio_int=uptail_max_ratio_int,
                                 previous_weight_int=previous_weight_int,
+                                buffer_ratio_int=buffer_ratio_int,
+                                tp_ratio_int=int(args.tp_ratio * 10),
                                 n_bar_breakout=args.n_bar_breakout)
         
         # Plot even when not optimizing
         if not args.no_plot:
             bt.plot(filename='bigbar.html')
-            print(f"Plot saved as bigbar.html with parameters: atr_period={args.atr_period}, k_atr={args.k_atr}, uptail_max_ratio={args.uptail_max_ratio}, previous_weight={args.previous_weight}")
+            print(f"Plot saved as bigbar.html with parameters: atr_period={args.atr_period}, k_atr={args.k_atr}, uptail_max_ratio={args.uptail_max_ratio}, previous_weight={args.previous_weight}, buffer_ratio={args.buffer_ratio}, tp_ratio={args.tp_ratio}")
         
     print("\nAll operations completed successfully!")
