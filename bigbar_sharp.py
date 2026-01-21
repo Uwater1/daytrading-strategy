@@ -116,8 +116,7 @@ def precompute_week_boundaries(df):
 
 # Strategy parameters
 INITIAL_CASH = 100000
-COMMISSION = 0.0
-SPREAD = 0.0001
+COMMISSION = 0.0001
 TRADE_ON_CLOSE = True
 
 class BigBarAllIn(Strategy):
@@ -455,7 +454,7 @@ def sambo_optimize_strategy_optimized(df, filepath, max_tries=5000, random_state
     
     try:
         # Create Backtest object with pre-computed data
-        bt = Backtest(df, BigBarAllIn, cash=INITIAL_CASH, commission=COMMISSION, spread=SPREAD, trade_on_close=TRADE_ON_CLOSE)
+        bt = Backtest(df, BigBarAllIn, cash=INITIAL_CASH, commission=COMMISSION, trade_on_close=TRADE_ON_CLOSE)
         
         # Run SAMBO optimization with built-in heatmap support
         optimize_result, heatmap, sambo_results = bt.optimize(
@@ -552,7 +551,7 @@ def run_backtest(filepath, print_result=True, atr_period=36, k_atr_int=29, uptai
         print(f"Backtest preparation completed in {elapsed:.4f} seconds")
 
     # Run backtest
-    bt = Backtest(df, BigBarAllIn, cash=INITIAL_CASH, commission=COMMISSION, spread=SPREAD, trade_on_close=TRADE_ON_CLOSE)
+    bt = Backtest(df, BigBarAllIn, cash=INITIAL_CASH, commission=COMMISSION, trade_on_close=TRADE_ON_CLOSE)
     stats = bt.run(
         atr_period=atr_period,
         k_atr_int=k_atr_int,
@@ -594,7 +593,7 @@ def plot_strategy_with_data(df, filepath, filename='optimized_strategy_plot.html
         raise SystemExit(f"Not enough data after ATR({optimized_params['atr_period']}) calculation")
 
     # Run backtest with optimized parameters using the same data as optimization
-    bt = Backtest(df_filtered, BigBarAllIn, cash=INITIAL_CASH, commission=COMMISSION, spread=SPREAD, trade_on_close=TRADE_ON_CLOSE)
+    bt = Backtest(df_filtered, BigBarAllIn, cash=INITIAL_CASH, commission=COMMISSION, trade_on_close=TRADE_ON_CLOSE)
     stats = bt.run(**optimized_params)
     
     # Plot and save
@@ -641,7 +640,7 @@ def plot_strategy(filepath, filename='optimized_strategy_plot.html', optimized_p
         raise SystemExit(f"Not enough data after ATR({optimized_params['atr_period']}) calculation")
 
     # Run backtest with optimized parameters
-    bt = Backtest(df, BigBarAllIn, cash=INITIAL_CASH, commission=COMMISSION, spread=SPREAD, trade_on_close=TRADE_ON_CLOSE)
+    bt = Backtest(df, BigBarAllIn, cash=INITIAL_CASH, commission=COMMISSION, trade_on_close=TRADE_ON_CLOSE)
     stats = bt.run(**optimized_params)
     
     # Plot and save
@@ -664,12 +663,8 @@ if __name__ == "__main__":
     parser.add_argument("--buffer-ratio", type=float, default=0.02, help="Buffer ratio (default: 0.02)")
     parser.add_argument("--tp-ratio", type=float, default=4.5, help="TP ATR multiplier (default: 3.0)")
     parser.add_argument("--n-bar-breakout", type=int, default=5, help="Number of bars for breakout detection (default: 5)")
-    parser.add_argument("--spread", type=float, default=0.0001, help="Bid-ask spread rate (default: 0.0001)")
     
     args = parser.parse_args()
-    
-    # Update global parameters with command line arguments
-    SPREAD = args.spread
     
     if not args.no_optimize:
         # Load and prepare data
