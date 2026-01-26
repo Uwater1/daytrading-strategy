@@ -270,24 +270,19 @@ class BigBarAllIn(Strategy):
                             units = int(equity / close_p) if equity > 0 and close_p > 0 else 0
                             if units >= 1:
                                 # Adaptive TP/SL Setup for Long
-                                # 1. Calculate pre-entry run height (consecutive green bars)
-                                run_height = 0
+                                # 1. Calculate pre-entry run "real move" (consecutive same-direction bodies)
                                 j = i
                                 while j >= 0 and self._close_array[j] > self._open_array[j]:
-                                    run_height = max(run_height, self._high_array[j] - self._low_array[j]) # Or is it Max(high) - Min(low)? 
-                                    # User says "2 x the size (high-low) of this first consecutive same-direction bar series"
-                                    # Wait, "first consecutive same-direction bar series" implies the whole series.
-                                    # "Set initial take-profit at 2 x the size (high-low) of this first consecutive same-direction bar series."
-                                    # Let's find the start of the consecutive run.
                                     j -= 1
                                 run_start_idx = j + 1
-                                series_height = np.max(self._high_array[run_start_idx:i+1]) - np.min(self._low_array[run_start_idx:i+1])
+                                series_body_move = self._close_array[i] - self._open_array[run_start_idx]
                                 
-                                self._initial_tp_target = close_p + 2 * series_height
+                                self._initial_tp_target = close_p + 2 * series_body_move
                                 self._base_sl_price = low_p
                                 self._tp_extended = True
                                 
-                                self.buy(size=units, sl=self._base_sl_price, tp=self._initial_tp_target)
+                                # Don't set TP yet - wait for first reverse bar
+                                self.buy(size=units, sl=self._base_sl_price, tp=None)
                                 self._in_trade = True
                                 self._entry_price = close_p
                                 self._entry_size = units
@@ -317,19 +312,19 @@ class BigBarAllIn(Strategy):
                             units = int(equity / close_p) if equity > 0 and close_p > 0 else 0
                             if units >= 1:
                                 # Adaptive TP/SL Setup for Short
-                                # 1. Calculate pre-entry run height (consecutive red bars)
-                                run_height = 0
+                                # 1. Calculate pre-entry run "real move" (consecutive same-direction bodies)
                                 j = i
                                 while j >= 0 and self._close_array[j] < self._open_array[j]:
                                     j -= 1
                                 run_start_idx = j + 1
-                                series_height = np.max(self._high_array[run_start_idx:i+1]) - np.min(self._low_array[run_start_idx:i+1])
+                                series_body_move = self._open_array[run_start_idx] - self._close_array[i]
                                 
-                                self._initial_tp_target = close_p - 2 * series_height
+                                self._initial_tp_target = close_p - 2 * series_body_move
                                 self._base_sl_price = high_p
                                 self._tp_extended = True
                                 
-                                self.sell(size=units, sl=self._base_sl_price, tp=self._initial_tp_target)
+                                # Don't set TP yet - wait for first reverse bar
+                                self.sell(size=units, sl=self._base_sl_price, tp=None)
                                 self._in_trade = True
                                 self._entry_price = close_p
                                 self._entry_size = units
@@ -351,13 +346,14 @@ class BigBarAllIn(Strategy):
                 # Measured Move Take-Profit Extension
                 if self._tp_extended:
                     if close_p > open_p:
-                        # Continue extending TP by the bar size (high-low)
-                        self._initial_tp_target += (high_p - low_p)
+                        # Continue extending TP by the bar body size (close-open)
+                        self._initial_tp_target += (close_p - open_p)
+                        # Don't activate TP yet - keep it None to allow continuation
+                    else:
+                        # First opposite-direction bar - NOW activate the TP
+                        self._tp_extended = False
                         for trade in self.trades:
                             trade.tp = self._initial_tp_target
-                    else:
-                        # First opposite-direction bar, stop extending
-                        self._tp_extended = False
 
                 # Half-Reversal Trailing Stop (Always Follow)
                 # new_sl = base_low + (current_low - base_low) / 2
@@ -371,13 +367,14 @@ class BigBarAllIn(Strategy):
                 # Measured Move Take-Profit Extension
                 if self._tp_extended:
                     if close_p < open_p:
-                        # Continue extending TP by the bar size (high-low)
-                        self._initial_tp_target -= (high_p - low_p)
+                        # Continue extending TP by the bar body size (open-close)
+                        self._initial_tp_target -= (open_p - close_p)
+                        # Don't activate TP yet - keep it None to allow continuation
+                    else:
+                        # First opposite-direction bar - NOW activate the TP
+                        self._tp_extended = False
                         for trade in self.trades:
                             trade.tp = self._initial_tp_target
-                    else:
-                        # First opposite-direction bar, stop extending
-                        self._tp_extended = False
 
                 # Half-Reversal Trailing Stop (Always Follow)
                 # new_sl = base_high - (base_high - current_high) / 2
