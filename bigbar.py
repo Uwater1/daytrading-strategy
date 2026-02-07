@@ -567,7 +567,11 @@ def run_backtest(filepath, print_result=True, atr_period=36, k_atr_int=29, uptai
     if hasattr(stats, '_trades') and not stats._trades.empty:
         trades_df = stats._trades[['EntryBar', 'ExitBar', 'EntryPrice', 'ExitPrice', 'Size', 'PnL']]
         trades_df.columns = ['entry_index', 'exit_index', 'entry_price', 'exit_price', 'size', 'pnl']
-        trades_df['direction'] = np.where(trades_df['size'] > 0, 'long', 'short')
+        trades_df['direction'] = np.select(
+            [trades_df['size'] > 0, trades_df['size'] < 0],
+            ['long', 'short'],
+            default=np.nan
+        )
         trades_df['size'] = trades_df['size'].abs()
         trades_df['entry_date'] = df.index[trades_df['entry_index']]
         trades_df['exit_date'] = df.index[trades_df['exit_index']]
