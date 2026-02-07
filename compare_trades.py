@@ -40,4 +40,8 @@ if __name__ == "__main__":
     parser.add_argument('new_path', nargs='?', default='trades_new_logic.csv', help='Path to the new trades CSV file (default: trades_new_logic.csv)')
     args = parser.parse_args()
 
-    analyze_trades(args.old_path, args.new_path)
+    try:
+        analyze_trades(args.old_path, args.new_path)
+    except FileNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
