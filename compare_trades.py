@@ -1,5 +1,7 @@
 import pandas as pd
 import numpy as np
+import argparse
+import sys
 
 def analyze_trades(old_path, new_path):
     old_df = pd.read_csv(old_path)
@@ -34,4 +36,13 @@ def analyze_trades(old_path, new_path):
     print(f"New Total PnL: {new_df['pnl'].sum():.2f}")
 
 if __name__ == "__main__":
-    analyze_trades('trades_old_logic.csv', 'trades_new_logic.csv')
+    parser = argparse.ArgumentParser(description='Compare trade results from two logic versions.')
+    parser.add_argument('old_path', nargs='?', default='trades_old_logic.csv', help='Path to the old trades CSV file (default: trades_old_logic.csv)')
+    parser.add_argument('new_path', nargs='?', default='trades_new_logic.csv', help='Path to the new trades CSV file (default: trades_new_logic.csv)')
+    args = parser.parse_args()
+
+    try:
+        analyze_trades(args.old_path, args.new_path)
+    except FileNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
