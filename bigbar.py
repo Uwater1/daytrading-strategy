@@ -567,10 +567,10 @@ def run_backtest(filepath, print_result=True, atr_period=36, k_atr_int=29, uptai
     if hasattr(stats, '_trades') and not stats._trades.empty:
         trades_df = stats._trades[['EntryBar', 'ExitBar', 'EntryPrice', 'ExitPrice', 'Size', 'PnL']]
         trades_df.columns = ['entry_index', 'exit_index', 'entry_price', 'exit_price', 'size', 'pnl']
-        trades_df['direction'] = trades_df['size'].apply(lambda x: 'long' if x > 0 else 'short')
+        trades_df['direction'] = np.where(trades_df['size'] > 0, 'long', 'short')
         trades_df['size'] = trades_df['size'].abs()
-        trades_df['entry_date'] = trades_df['entry_index'].apply(lambda idx: df.index[idx])
-        trades_df['exit_date'] = trades_df['exit_index'].apply(lambda idx: df.index[idx])
+        trades_df['entry_date'] = df.index[trades_df['entry_index']]
+        trades_df['exit_date'] = df.index[trades_df['exit_index']]
         trades_df = trades_df.drop(['entry_index', 'exit_index'], axis=1)
         trades_df = trades_df[['entry_date', 'exit_date', 'entry_price', 'exit_price', 'size', 'pnl', 'direction']]
         trades_df['pnl'] = trades_df['pnl'].round(2)
