@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import argparse
+import sys
 
 def analyze_trades(old_path, new_path):
     old_df = pd.read_csv(old_path)
