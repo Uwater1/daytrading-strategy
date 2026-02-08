@@ -149,6 +149,8 @@ class BigBarAllIn(Strategy):
     previous_weight_int = 41
     n_bar_breakout = 16  # Number of previous bars to consider for breakout detection
     rsi_period = 14  # RSI Period for filtering
+    rsi_upper_limit = 70 # Default upper RSI limit
+    rsi_lower_limit = 30 # Default lower RSI limit
     
     def init(self):
         """Initialize strategy state variables with memory-optimized caching"""
@@ -285,7 +287,7 @@ class BigBarAllIn(Strategy):
                 
                 cond_size = (size >= dynamic_k * atr)
                 cond_uptail_long = ( (high_p - close_p) < (uptail_max_ratio * size) )
-                cond_rsi_long = (rsi_val < 70)  # Avoid buying if already Overbought
+                cond_rsi_long = (rsi_val < self.rsi_upper_limit)  # Avoid buying if already Overbought
                 
                 if cond_size and cond_uptail_long and cond_rsi_long:
                     # Breakout filter for long entries: close must break above previous N bars' highest high
@@ -328,7 +330,7 @@ class BigBarAllIn(Strategy):
                 
                 cond_size = (size >= dynamic_k * atr)
                 cond_downtail_short = ( (close_p - low_p) < (uptail_max_ratio * size) )
-                cond_rsi_short = (rsi_val > 30)  # Avoid selling if already Oversold
+                cond_rsi_short = (rsi_val > self.rsi_lower_limit)  # Avoid selling if already Oversold
                 
                 if cond_size and cond_downtail_short and cond_rsi_short:
                     # Breakout filter for short entries: close must break below previous N bars' lowest low
@@ -472,7 +474,7 @@ def prepare_data_pipeline(filepath, min_atr_period=20, max_atr_period=100, rsi_p
     _prepared_cache[cache_key] = df
     return df
 
-def sambo_optimize_strategy_optimized(df, filepath, max_tries=5000, random_state=1):
+def sambo_optimize_strategy_optimized(df, filepath, max_tries=5000, random_state=1, rsi_period=14):
     """
     SAMBO optimization with integer parameters for 1 decimal place precision.
     Uses pre-computed data for optimal performance and built-in heatmap support.
@@ -483,7 +485,9 @@ def sambo_optimize_strategy_optimized(df, filepath, max_tries=5000, random_state
         'k_atr_int': [20, 42],             # Integer range representing 1.0-4.0 when divided by 10
         'uptail_max_ratio_int': [1, 6],    # Integer range representing 0.5-0.9 when divided by 10
         'previous_weight_int': [10, 60],     # Integer range representing 0.10-0.80 when divided by 100
-        'n_bar_breakout': [2, 20]           # Range for breakout filter (2 to 20 bars)
+        'n_bar_breakout': [2, 20],          # Range for breakout filter (2 to 20 bars)
+        'rsi_upper_limit': [60, 90],        # Range for upper RSI limit
+        'rsi_lower_limit': [10, 40]         # Range for lower RSI limit
     }
     
     # Define constraint function
@@ -504,6 +508,9 @@ def sambo_optimize_strategy_optimized(df, filepath, max_tries=5000, random_state
             uptail_max_ratio_int=param_ranges['uptail_max_ratio_int'],
             previous_weight_int=param_ranges['previous_weight_int'],
             n_bar_breakout=param_ranges['n_bar_breakout'],
+            rsi_upper_limit=param_ranges['rsi_upper_limit'],
+            rsi_lower_limit=param_ranges['rsi_lower_limit'],
+            rsi_period=rsi_period,  # Constant parameter
             constraint=constraint,
             maximize='Return [%]',
             method='sambo',
@@ -522,7 +529,9 @@ def sambo_optimize_strategy_optimized(df, filepath, max_tries=5000, random_state
             'k_atr_int': st.k_atr_int,
             'uptail_max_ratio_int': st.uptail_max_ratio_int,
             'previous_weight_int': st.previous_weight_int,
-            'n_bar_breakout': st.n_bar_breakout
+            'n_bar_breakout': st.n_bar_breakout,
+            'rsi_upper_limit': st.rsi_upper_limit,
+            'rsi_lower_limit': st.rsi_lower_limit
         }
         
         # Save heatmap data to CSV for persistence
@@ -533,6 +542,8 @@ def sambo_optimize_strategy_optimized(df, filepath, max_tries=5000, random_state
                 'uptail_max_ratio_int': [idx[2] for idx in heatmap.index],
                 'previous_weight_int': [idx[3] for idx in heatmap.index],
                 'n_bar_breakout': [idx[4] for idx in heatmap.index],
+                'rsi_upper_limit': [idx[5] for idx in heatmap.index],
+                'rsi_lower_limit': [idx[6] for idx in heatmap.index],
                 'return_pct': heatmap.values
             })
             heatmap_df.to_csv('sambo_heatmap_results.csv', index=False)
@@ -559,7 +570,7 @@ def sambo_optimize_strategy_optimized(df, filepath, max_tries=5000, random_state
         raise SystemExit(f"SAMBO optimization failed: {e}")
 
 
-def run_backtest(filepath, print_result=True, atr_period=36, k_atr_int=29, uptail_max_ratio_int=6, previous_weight_int=21, n_bar_breakout=15, rsi_period=14):
+def run_backtest(filepath, print_result=True, atr_period=36, k_atr_int=29, uptail_max_ratio_int=6, previous_weight_int=21, n_bar_breakout=15, rsi_period=14, rsi_upper_limit=70, rsi_lower_limit=30):
     """
     Run backtest with pre-computed data.
     """
@@ -596,7 +607,9 @@ def run_backtest(filepath, print_result=True, atr_period=36, k_atr_int=29, uptai
         uptail_max_ratio_int=uptail_max_ratio_int,
         previous_weight_int=previous_weight_int,
         n_bar_breakout=n_bar_breakout,
-        rsi_period=rsi_period
+        rsi_period=rsi_period,
+        rsi_upper_limit=rsi_upper_limit,
+        rsi_lower_limit=rsi_lower_limit
     )
     
     # Save trades to CSV
@@ -641,7 +654,9 @@ def plot_strategy_with_data(df, filepath, filename='optimized_strategy_plot.html
     bt.plot(filename=filename)
     # Note: Assuming rsi_period is in optimized_params or defaults to 14
     rsi_period = optimized_params.get('rsi_period', 14)
-    print(f"Plot {filename} with: atr_period={optimized_params['atr_period']}, k_atr={optimized_params['k_atr_int'] / 10}, uptail_max_ratio={optimized_params['uptail_max_ratio_int'] / 10}, previous_weight={optimized_params['previous_weight_int'] / 100}, rsi_period={rsi_period}")
+    rsi_upper_limit = optimized_params.get('rsi_upper_limit', 70)
+    rsi_lower_limit = optimized_params.get('rsi_lower_limit', 30)
+    print(f"Plot {filename} with: atr_period={optimized_params['atr_period']}, k_atr={optimized_params['k_atr_int'] / 10}, uptail_max_ratio={optimized_params['uptail_max_ratio_int'] / 10}, previous_weight={optimized_params['previous_weight_int'] / 100}, rsi_period={rsi_period}, rsi_upper_limit={rsi_upper_limit}, rsi_lower_limit={rsi_lower_limit}")
 
 
 def plot_strategy(filepath, filename='optimized_strategy_plot.html', optimized_params=None):
@@ -656,7 +671,9 @@ def plot_strategy(filepath, filename='optimized_strategy_plot.html', optimized_p
                 'uptail_max_ratio_int': 6,
                 'previous_weight_int': 21,
                 'n_bar_breakout': 15,
-                'rsi_period': 14
+                'rsi_period': 14,
+                'rsi_upper_limit': 70,
+                'rsi_lower_limit': 30
             }
         except Exception:
             optimized_params = {
@@ -665,7 +682,9 @@ def plot_strategy(filepath, filename='optimized_strategy_plot.html', optimized_p
                 'uptail_max_ratio_int': 6,
                 'previous_weight_int': 21,
                 'n_bar_breakout': 15,
-                'rsi_period': 14
+                'rsi_period': 14,
+                'rsi_upper_limit': 70,
+                'rsi_lower_limit': 30
             }
     
     rsi_period = optimized_params.get('rsi_period', 14)
@@ -695,7 +714,9 @@ def plot_strategy(filepath, filename='optimized_strategy_plot.html', optimized_p
     
     # Plot and save
     bt.plot(filename=filename)
-    print(f"Plot saved as {filename}, with parameters: atr_period={optimized_params['atr_period']}, k_atr={optimized_params['k_atr_int'] / 10}, uptail_max_ratio={optimized_params['uptail_max_ratio_int'] / 10}, previous_weight={optimized_params['previous_weight_int'] / 100}, rsi_period={rsi_period}")
+    rsi_upper_limit = optimized_params.get('rsi_upper_limit', 70)
+    rsi_lower_limit = optimized_params.get('rsi_lower_limit', 30)
+    print(f"Plot saved as {filename}, with parameters: atr_period={optimized_params['atr_period']}, k_atr={optimized_params['k_atr_int'] / 10}, uptail_max_ratio={optimized_params['uptail_max_ratio_int'] / 10}, previous_weight={optimized_params['previous_weight_int'] / 100}, rsi_period={rsi_period}, rsi_upper_limit={rsi_upper_limit}, rsi_lower_limit={rsi_lower_limit}")
 
 
 if __name__ == "__main__":
@@ -742,7 +763,7 @@ if __name__ == "__main__":
             raise SystemExit(f"Not enough data after ATR calculation for periods 10-100")
 
         # Use SAMBO optimization directly
-        best_result, all_results = sambo_optimize_strategy_optimized(df, args.filepath)
+        best_result, all_results = sambo_optimize_strategy_optimized(df, args.filepath, rsi_period=args.rsi_period)
         
         if best_result:
             params, optimize_result = best_result
@@ -752,6 +773,8 @@ if __name__ == "__main__":
             print(f"  uptail_max_ratio: {params['uptail_max_ratio_int'] / 10}")
             print(f"  previous_weight: {params['previous_weight_int'] / 100}")
             print(f"  n_bar_breakout: {params['n_bar_breakout']}")
+            print(f"  rsi_upper_limit: {params['rsi_upper_limit']}")
+            print(f"  rsi_lower_limit: {params['rsi_lower_limit']}")
             
             # Print the statistics (restored as requested)
             print(optimize_result)
@@ -770,11 +793,13 @@ if __name__ == "__main__":
                                 uptail_max_ratio_int=uptail_max_ratio_int,
                                 previous_weight_int=previous_weight_int,
                                 n_bar_breakout=args.n_bar_breakout,
-                                rsi_period=args.rsi_period)
+                                rsi_period=args.rsi_period,
+                                rsi_upper_limit=args.rsi_upper_limit,
+                                rsi_lower_limit=args.rsi_lower_limit)
         
         # Plot even when not optimizing
         if not args.no_plot:
             bt.plot(filename='bigbar.html')
-            print(f"Plot saved as bigbar.html with parameters: atr_period={args.atr_period}, k_atr={args.k_atr}, uptail_max_ratio={args.uptail_max_ratio}, previous_weight={args.previous_weight}, rsi_period={args.rsi_period}")
+            print(f"Plot saved as bigbar.html with parameters: atr_period={args.atr_period}, k_atr={args.k_atr}, uptail_max_ratio={args.uptail_max_ratio}, previous_weight={args.previous_weight}, rsi_period={args.rsi_period}, rsi_upper_limit={args.rsi_upper_limit}, rsi_lower_limit={args.rsi_lower_limit}")
         
     print("\nAll operations completed successfully!")
